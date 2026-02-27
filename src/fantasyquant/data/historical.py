@@ -85,9 +85,19 @@ def load_weekly_stats(
     raw = raw[raw["position"].isin(FANTASY_POSITIONS)]
     raw = raw[raw["week"] <= config.nfl_weeks]
 
-    # Rename and subset columns.
+    # Rename and subset columns.  Prefer player_display_name over
+    # player_name to avoid duplicates when both exist.
+    if "player_display_name" in raw.columns and "player_name" in raw.columns:
+        raw = raw.drop(columns=["player_name"])
     available = {k: v for k, v in _COLUMN_MAP.items() if k in raw.columns}
-    df = raw.rename(columns=available)[list(available.values())].copy()
+    # Deduplicate target column names while preserving order.
+    seen: set[str] = set()
+    target_cols: list[str] = []
+    for v in available.values():
+        if v not in seen:
+            target_cols.append(v)
+            seen.add(v)
+    df = raw.rename(columns=available)[target_cols].copy()
 
     # Ensure numeric stat columns exist even if source is missing one.
     for col in (

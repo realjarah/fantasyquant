@@ -96,7 +96,8 @@ class AlternatingMinimization:
         mask = opponents.notna().values
 
         # Map opponent names → integer indices.
-        all_teams = sorted(opponents.stack().dropna().unique())
+        opp_flat = pd.Series(opponents.values.ravel()).dropna().unique()
+        all_teams = sorted(opp_flat)
         team_to_idx = {t: i for i, t in enumerate(all_teams)}
         n_teams = len(all_teams)
 

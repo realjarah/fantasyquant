@@ -64,10 +64,14 @@ def project_raw_weekly(
     pd.DataFrame
         Index = player_id, columns = week numbers (1..weeks).
     """
+    # Deduplicate players who appear multiple times (e.g., team changes).
+    # Keep the highest skill estimate.
+    player_skill = player_skill.groupby(player_skill.index).max()
+
     records: list[dict] = []
     for pid, skill in player_skill.items():
         team = player_teams.get(pid)
-        if team is None or team not in matchup_grid:
+        if team is None or not isinstance(team, str) or team not in matchup_grid:
             continue
         row: dict = {"player_id": pid}
         for w in range(1, weeks + 1):

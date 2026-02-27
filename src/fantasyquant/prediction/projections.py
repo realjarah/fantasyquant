@@ -107,8 +107,13 @@ def build_projections(
     )
 
     # ---- 5. Raw weekly projections ----
+    # Players who changed teams across seasons appear multiple times in
+    # player_info.  Keep only the most recent team per player_id.
+    _team_df = player_info[["player_id", "team"]].drop_duplicates(
+        subset="player_id", keep="last",
+    )
     player_teams = pd.Series(
-        player_info["team"].values, index=player_info["player_id"].values,
+        _team_df["team"].values, index=_team_df["player_id"].values,
     )
     raw = project_raw_weekly(
         decomp.player_skill, w_final, matchup_grid, player_teams,
