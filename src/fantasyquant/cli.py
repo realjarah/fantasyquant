@@ -8,7 +8,36 @@ from pathlib import Path
 import click
 
 from fantasyquant.config import EngineConfig, DEFAULT_CONFIG
+from fantasyquant.league import (
+    PRESETS,
+    league_to_dict,
+    list_presets,
+    load_league,
+    save_league_template,
+)
 
+
+# ------------------------------------------------------------------
+# Shared option: --league
+# ------------------------------------------------------------------
+
+def _load_config(
+    league_path: str | None,
+    season: int | None = None,
+) -> EngineConfig:
+    """Load config from --league file, falling back to defaults."""
+    if league_path:
+        config = load_league(league_path)
+    else:
+        config = EngineConfig()
+    if season is not None:
+        config.current_season = season
+    return config
+
+
+# ------------------------------------------------------------------
+# CLI group
+# ------------------------------------------------------------------
 
 @click.group()
 @click.version_option(package_name="fantasyquant")
@@ -17,23 +46,132 @@ def main() -> None:
 
 
 # ------------------------------------------------------------------
+# init
+# ------------------------------------------------------------------
+
+@main.command()
+@click.option("--preset", type=click.Choice(list_presets(), case_sensitive=False),
+              default=None, help="Start from a platform preset.")
+@click.option("--output", "-o", type=click.Path(), default="league.json",
+              help="Output file path.")
+def init(preset: str | None, output: str) -> None:
+    """Generate a league.json configuration file.
+
+    Start from a platform preset or answer prompts to configure
+    your league's scoring and roster rules.
+    """
+    if preset:
+        path = save_league_template(output, preset=preset)
+        click.echo(f"Created {path} from preset '{preset}'")
+        config = load_league(preset=preset)
+    else:
+        click.echo("Let's set up your league.\n")
+
+        # Platform
+        platforms = ["espn", "yahoo", "sleeper", "nfl", "underdog", "custom"]
+        for i, p in enumerate(platforms, 1):
+            click.echo(f"  {i}. {p}")
+        choice = click.prompt("Platform", type=int, default=1)
+        platform = platforms[min(choice, len(platforms)) - 1]
+
+        # Teams
+        teams = click.prompt("Number of teams", type=int, default=12)
+
+        # Scoring format
+        formats = {"1": ("PPR", 1.0), "2": ("Half-PPR", 0.5), "3": ("Standard", 0.0)}
+        click.echo("\nScoring format:")
+        for k, (name, _) in formats.items():
+            click.echo(f"  {k}. {name}")
+        fmt_choice = click.prompt("Format", default="1")
+        _, reception_pts = formats.get(fmt_choice, ("PPR", 1.0))
+
+        # Passing TDs
+        pass_td = click.prompt("Points per passing TD", type=float, default=4.0)
+
+        # Superflex
+        has_superflex = click.confirm("Superflex league?", default=False)
+
+        # Build config
+        config = EngineConfig(
+            platform=platform,
+            scoring=DEFAULT_CONFIG.scoring.__class__(
+                receptions=reception_pts,
+                passing_tds=pass_td,
+            ),
+            roster=DEFAULT_CONFIG.roster.__class__(
+                teams=teams,
+                superflex=1 if has_superflex else 0,
+            ),
+        )
+
+        data = league_to_dict(config)
+        path = Path(output)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        click.echo(f"\nCreated {path}")
+
+    click.echo(f"\n  Platform:  {config.platform}")
+    click.echo(f"  Teams:     {config.roster.teams}")
+    click.echo(f"  Scoring:   {config.scoring.reception_format}")
+    click.echo(f"  Pass TD:   {config.scoring.passing_tds} pts")
+    click.echo(f"  Superflex: {'Yes' if config.roster.superflex else 'No'}")
+    click.echo(f"  Starters:  {config.roster.starters}")
+    click.echo(f"\nEdit {output} to fine-tune, then pass --league {output} to any command.")
+
+
+# ------------------------------------------------------------------
+# presets
+# ------------------------------------------------------------------
+
+@main.command()
+def presets() -> None:
+    """List available platform presets."""
+    click.echo("Available presets:\n")
+    for name in list_presets():
+        p = PRESETS[name]
+        scoring = p.get("scoring", {})
+        roster = p.get("roster", {})
+        rec = scoring.get("receptions", 1.0)
+        fmt = "PPR" if rec >= 1.0 else ("Half-PPR" if rec >= 0.5 else "Standard")
+        sf = "SF" if roster.get("superflex", 0) else ""
+        click.echo(
+            f"  {name:25s} {roster.get('teams', '?'):2d}-team  {fmt:9s} {sf}"
+        )
+    click.echo(f"\nUsage: fq init --preset <name>")
+
+
+# ------------------------------------------------------------------
 # project
 # ------------------------------------------------------------------
 
 @main.command()
-@click.option("--season", default=DEFAULT_CONFIG.current_season, show_default=True)
+@click.option("--league", "league_path", type=click.Path(exists=True), default=None,
+              help="Path to league.json configuration.")
+@click.option("--season", default=None, type=int,
+              help="Override season year.")
 @click.option("--win-totals", type=click.Path(exists=True), default=None,
               help="Path to win totals JSON/CSV.")
 @click.option("--player-props", type=click.Path(exists=True), default=None,
               help="Path to player props JSON/CSV.")
 @click.option("--output", "-o", type=click.Path(), default="projections.csv",
               help="Output file for the f(i,t) matrix.")
-def project(season: int, win_totals: str | None, player_props: str | None, output: str) -> None:
+def project(
+    league_path: str | None,
+    season: int | None,
+    win_totals: str | None,
+    player_props: str | None,
+    output: str,
+) -> None:
     """Build the weekly projection matrix f(i,t)."""
     from fantasyquant.prediction.projections import build_projections
 
-    config = EngineConfig(current_season=season)
+    config = _load_config(league_path, season)
+    if season is None:
+        season = config.current_season
+
     click.echo(f"Building projections for {season} season...")
+    click.echo(f"  Scoring: {config.scoring.reception_format}  |  Platform: {config.platform}")
 
     result = build_projections(
         config,
@@ -44,7 +182,6 @@ def project(season: int, win_totals: str | None, player_props: str | None, outpu
     result.weekly_projections.to_csv(output)
     click.echo(f"Wrote {len(result.weekly_projections)} player projections to {output}")
 
-    # Also dump player info.
     info_path = Path(output).with_suffix(".info.csv")
     result.player_info.to_csv(info_path, index=False)
     click.echo(f"Wrote player metadata to {info_path}")
@@ -55,20 +192,19 @@ def project(season: int, win_totals: str | None, player_props: str | None, outpu
 # ------------------------------------------------------------------
 
 @main.command()
-@click.option("--season", default=DEFAULT_CONFIG.current_season, show_default=True)
+@click.option("--league", "league_path", type=click.Path(exists=True), default=None,
+              help="Path to league.json configuration.")
+@click.option("--season", default=None, type=int)
 @click.option("--slot", default=1, show_default=True,
               help="Your draft position (1-indexed).")
-@click.option("--teams", default=DEFAULT_CONFIG.roster.teams, show_default=True)
-@click.option("--rounds", default=DEFAULT_CONFIG.roster.rounds, show_default=True)
 @click.option("--projections", type=click.Path(exists=True), default=None,
               help="Pre-built projections CSV. If omitted, builds fresh.")
 @click.option("--adp", type=click.Path(exists=True), default=None,
               help="ADP data CSV (columns: player_id, adp).")
 def draft(
-    season: int,
+    league_path: str | None,
+    season: int | None,
     slot: int,
-    teams: int,
-    rounds: int,
     projections: str | None,
     adp: str | None,
 ) -> None:
@@ -78,8 +214,11 @@ def draft(
     from fantasyquant.optimization.draft_loop import DraftLoop
     from fantasyquant.optimization.solver import PlayerPool
 
-    config = EngineConfig(current_season=season)
-    config.roster = config.roster.__class__(teams=teams, rounds=rounds)
+    config = _load_config(league_path, season)
+
+    click.echo(f"  Platform: {config.platform}  |  {config.roster.teams}-team  |  {config.scoring.reception_format}")
+    if config.roster.superflex:
+        click.echo(f"  Superflex: Yes")
 
     if projections:
         proj_df = pd.read_csv(projections, index_col=0)
@@ -109,21 +248,23 @@ def draft(
 # ------------------------------------------------------------------
 
 @main.command()
+@click.option("--league", "league_path", type=click.Path(exists=True), default=None,
+              help="Path to league.json configuration.")
 @click.option("--test-season", required=True, type=int,
               help="Season to test against (e.g. 2023).")
 @click.option("--slot", default=1, show_default=True,
               help="Simulated draft position.")
-def backtest(test_season: int, slot: int) -> None:
+def backtest(league_path: str | None, test_season: int, slot: int) -> None:
     """Run a historical backtest."""
     from fantasyquant.backtest.simulator import backtest as run_backtest
 
-    config = EngineConfig(current_season=test_season)
+    config = _load_config(league_path, season=test_season)
     train_end = test_season - 1
     train_start = train_end - config.prediction.training_seasons + 1
     training = list(range(train_start, train_end + 1))
 
     click.echo(f"Backtesting: train on {training}, test on {test_season}")
-    click.echo(f"Draft slot: {slot}")
+    click.echo(f"  {config.scoring.reception_format}  |  {config.roster.teams}-team  |  Draft slot: {slot}")
 
     result = run_backtest(training, test_season, config, my_slot=slot)
 

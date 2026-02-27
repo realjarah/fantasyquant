@@ -406,6 +406,19 @@ class DraftSolver:
                     <= roster.rb + roster.wr + roster.te + roster.flex
                 )
 
+            # SUPERFLEX slot: one additional QB/RB/WR/TE can start.
+            if roster.superflex > 0:
+                all_skill_pids = [
+                    pid for pid in candidate_ids
+                    if id_to_pos.get(pid) in ("QB", "RB", "WR", "TE")
+                ]
+                if all_skill_pids:
+                    prob += (
+                        pulp.lpSum(x[(pid, w)] for pid in all_skill_pids)
+                        <= roster.qb + roster.rb + roster.wr + roster.te
+                        + roster.flex + roster.superflex
+                    )
+
         # --- Constraint (1e): can only start a player you own ---
         for pid in candidate_ids:
             for w in range(1, self.weeks + 1):
@@ -424,10 +437,10 @@ class DraftSolver:
 
         # Position upper bounds on total roster.
         pos_limits = {
-            "QB": roster.qb + roster.bench,
-            "RB": roster.rb + roster.flex + roster.bench,
-            "WR": roster.wr + roster.flex + roster.bench,
-            "TE": roster.te + roster.flex + roster.bench,
+            "QB": roster.qb + roster.superflex + roster.bench,
+            "RB": roster.rb + roster.flex + roster.superflex + roster.bench,
+            "WR": roster.wr + roster.flex + roster.superflex + roster.bench,
+            "TE": roster.te + roster.flex + roster.superflex + roster.bench,
         }
         for pos, limit in pos_limits.items():
             pids_at_pos = [

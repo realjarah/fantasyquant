@@ -1,4 +1,11 @@
-"""Central configuration for the FantasyQuant engine."""
+"""Central configuration for the FantasyQuant engine.
+
+A league's rules are the foundation — scoring, roster slots, and
+platform quirks flow through projections, the solver, and lineup
+management.  Users configure via a ``league.json`` file or CLI flags.
+"""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -9,17 +16,31 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ScoringSettings:
-    """PPR scoring weights (easily swappable to half-PPR or standard)."""
+    """Fantasy point weights per stat category.
+
+    Covers the three standard formats (PPR / half-PPR / standard) plus
+    platform-specific extras like passing-TD bonuses (4 vs 6 pt).
+    """
 
     passing_yards: float = 0.04
     passing_tds: float = 4.0
     interceptions: float = -2.0
     rushing_yards: float = 0.1
     rushing_tds: float = 6.0
-    receptions: float = 1.0  # PPR
+    receptions: float = 1.0        # 1.0 = PPR, 0.5 = half-PPR, 0.0 = standard
     receiving_yards: float = 0.1
     receiving_tds: float = 6.0
     fumbles_lost: float = -2.0
+    two_point_conversions: float = 2.0
+    passing_2pt: float = 2.0
+
+    @property
+    def reception_format(self) -> str:
+        if self.receptions >= 1.0:
+            return "PPR"
+        elif self.receptions >= 0.5:
+            return "Half-PPR"
+        return "Standard"
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +49,7 @@ class ScoringSettings:
 
 @dataclass(frozen=True)
 class RosterSettings:
-    """Standard roster construction for a 10-team league."""
+    """Roster construction rules for a fantasy league."""
 
     teams: int = 10
     rounds: int = 15
@@ -36,18 +57,27 @@ class RosterSettings:
     rb: int = 2
     wr: int = 2
     te: int = 1
-    flex: int = 1  # RB/WR/TE
+    flex: int = 1         # RB/WR/TE
+    superflex: int = 0    # QB/RB/WR/TE — changes QB scarcity dramatically
     bench: int = 6
     dst: int = 1
     k: int = 1
 
     @property
     def total_slots(self) -> int:
-        return self.qb + self.rb + self.wr + self.te + self.flex + self.bench + self.dst + self.k
+        return (
+            self.qb + self.rb + self.wr + self.te
+            + self.flex + self.superflex
+            + self.bench + self.dst + self.k
+        )
 
     @property
     def starters(self) -> int:
-        return self.qb + self.rb + self.wr + self.te + self.flex + self.dst + self.k
+        return (
+            self.qb + self.rb + self.wr + self.te
+            + self.flex + self.superflex
+            + self.dst + self.k
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +130,7 @@ class EngineConfig:
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     nfl_weeks: int = 17
     current_season: int = 2025
+    platform: str = "custom"   # e.g. "espn", "yahoo", "sleeper", "nfl"
 
 
 DEFAULT_CONFIG = EngineConfig()

@@ -2,10 +2,11 @@
 
 Given a roster and projected (or actual) weekly scores, select the
 starting lineup that maximises total fantasy points subject to
-positional slot limits:  1 QB, 2 RB, 2 WR, 1 TE, 1 FLEX (RB/WR/TE).
+positional slot limits.  Supports standard FLEX (RB/WR/TE) and
+SUPERFLEX (QB/RB/WR/TE) slots.
 
 Uses a greedy approach: fill each required slot from best available,
-then fill FLEX from remaining eligible players.
+then fill FLEX, then SUPERFLEX from remaining eligible players.
 """
 
 from __future__ import annotations
@@ -80,6 +81,22 @@ def set_lineup(
         starters.append(pid)
         used.add(pid)
         flex_filled += 1
+
+    # Fill SUPERFLEX slots (QB/RB/WR/TE not yet started).
+    if r.superflex > 0:
+        sflex_candidates: list[tuple[str, float]] = []
+        for pos in ("QB", "RB", "WR", "TE"):
+            for pid, pts in by_pos[pos]:
+                if pid not in used:
+                    sflex_candidates.append((pid, pts))
+        sflex_candidates.sort(key=lambda x: x[1], reverse=True)
+        sflex_filled = 0
+        for pid, _ in sflex_candidates:
+            if sflex_filled >= r.superflex:
+                break
+            starters.append(pid)
+            used.add(pid)
+            sflex_filled += 1
 
     total = sum(scores.get(pid, 0.0) for pid in starters)
     return starters, total
