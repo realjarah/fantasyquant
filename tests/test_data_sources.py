@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fantasyquant.config import EngineConfig, ScoringSettings
+from fantasyquant.config import EngineConfig, RosterSettings, ScoringSettings
 
 
 # -----------------------------------------------------------------------
@@ -82,6 +82,109 @@ class TestLoadAdp:
         # (nfl_data_py may succeed in the test environment, so we just
         # check it doesn't crash.)
         assert result is None or isinstance(result, pd.Series)
+
+
+# -----------------------------------------------------------------------
+# VOR-based ADP tests (scoring + roster aware)
+# -----------------------------------------------------------------------
+
+
+class TestReplacementLevel:
+    """Tests for _replacement_level() — the positional scarcity model."""
+
+    def test_standard_1qb_league(self):
+        from fantasyquant.data.adp import _replacement_level
+
+        config = EngineConfig(roster=RosterSettings(
+            teams=12, qb=1, rb=2, wr=2, te=1, flex=1, superflex=0,
+        ))
+        repl = _replacement_level(config)
+        # Standard 1QB: 12 teams × 1 QB = 12 + 1 = 13th QB is replacement.
+        assert repl["QB"] == pytest.approx(13.0, abs=0.1)
+        # RBs: 12 teams × (2 + 0.5 flex) = 30 + 1 = 31st RB.
+        assert repl["RB"] == pytest.approx(31.0, abs=0.1)
+
+    def test_superflex_boosts_qb_replacement(self):
+        from fantasyquant.data.adp import _replacement_level
+
+        standard = EngineConfig(roster=RosterSettings(
+            teams=12, qb=1, rb=2, wr=2, te=1, flex=1, superflex=0,
+        ))
+        superflex = EngineConfig(roster=RosterSettings(
+            teams=12, qb=1, rb=2, wr=2, te=1, flex=1, superflex=1,
+        ))
+        repl_std = _replacement_level(standard)
+        repl_sf = _replacement_level(superflex)
+
+        # In superflex, QB replacement level should be MUCH higher
+        # (more QBs are starters → replacement player is deeper).
+        assert repl_sf["QB"] > repl_std["QB"]
+        # Roughly: 12 × (1 + 0.7) = 20.4 + 1 = ~21.4 for superflex.
+        assert repl_sf["QB"] == pytest.approx(21.4, abs=0.5)
+
+    def test_deep_league_shifts_replacement(self):
+        from fantasyquant.data.adp import _replacement_level
+
+        ten_team = EngineConfig(roster=RosterSettings(teams=10, qb=1, rb=2, wr=2, te=1, flex=1))
+        fourteen_team = EngineConfig(roster=RosterSettings(teams=14, qb=1, rb=2, wr=2, te=1, flex=1))
+        repl_10 = _replacement_level(ten_team)
+        repl_14 = _replacement_level(fourteen_team)
+
+        # All replacement levels should increase with more teams.
+        for pos in ["QB", "RB", "WR", "TE"]:
+            assert repl_14[pos] > repl_10[pos], f"{pos} should increase in deeper leagues"
+
+    def test_two_qb_league(self):
+        from fantasyquant.data.adp import _replacement_level
+
+        config = EngineConfig(roster=RosterSettings(
+            teams=12, qb=2, rb=2, wr=2, te=1, flex=1, superflex=0,
+        ))
+        repl = _replacement_level(config)
+        # 2QB: 12 × 2 = 24 + 1 = 25th QB is replacement.
+        assert repl["QB"] == pytest.approx(25.0, abs=0.1)
+
+
+class TestVorAdp:
+    """Tests that VOR-based ADP respects scoring format."""
+
+    def test_vor_adp_returns_series(self):
+        from fantasyquant.data.adp import _derive_vor_adp
+
+        config = EngineConfig()
+        result = _derive_vor_adp(config)
+        # May return None if nfl_data_py unavailable.
+        if result is not None:
+            assert isinstance(result, pd.Series)
+            assert result.name == "adp"
+            assert len(result) > 0
+            # ADP ranks should start at 1.
+            assert float(result.iloc[0]) == 1.0
+
+    def test_vor_adp_different_for_ppr_vs_standard(self):
+        """PPR and Standard should produce different ADP rankings."""
+        from fantasyquant.data.adp import _derive_vor_adp
+
+        ppr_config = EngineConfig(scoring=ScoringSettings(receptions=1.0))
+        std_config = EngineConfig(scoring=ScoringSettings(receptions=0.0))
+
+        ppr_adp = _derive_vor_adp(ppr_config)
+        std_adp = _derive_vor_adp(std_config)
+
+        if ppr_adp is None or std_adp is None:
+            pytest.skip("nfl_data_py not available")
+
+        # The rankings should not be identical.
+        # In PPR, pass-catching RBs/WRs rise; in standard, rushing-heavy RBs rise.
+        common = set(ppr_adp.index) & set(std_adp.index)
+        assert len(common) > 50  # Should have many players in common.
+
+        # At least some players should have different ranks.
+        differences = sum(
+            1 for pid in common
+            if abs(float(ppr_adp[pid]) - float(std_adp[pid])) > 2
+        )
+        assert differences > 10, "PPR vs Standard should produce meaningfully different ADP"
 
 
 # -----------------------------------------------------------------------

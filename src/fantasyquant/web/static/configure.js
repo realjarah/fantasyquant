@@ -217,9 +217,11 @@
   // Data sources toggle.
   document.getElementById("data-toggle").addEventListener("click", () => {
     const panel = document.getElementById("data-sources-panel");
-    const icon = document.getElementById("data-toggle-icon");
+    const btn = document.getElementById("data-toggle");
     panel.classList.toggle("hidden");
-    icon.textContent = panel.classList.contains("hidden") ? "\u25B6 Optional" : "\u25BC Expanded";
+    btn.innerHTML = panel.classList.contains("hidden")
+      ? "Advanced: use your own data &#9654;"
+      : "Advanced: use your own data &#9660;";
   });
 
   // File upload handlers.

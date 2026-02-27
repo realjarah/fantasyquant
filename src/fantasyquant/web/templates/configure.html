@@ -145,18 +145,35 @@
 
       <!-- Data Sources (collapsible) -->
       <div class="bg-fq-card rounded-lg border border-fq-border p-5">
-        <button type="button" id="data-toggle"
-                class="flex items-center justify-between w-full text-left">
-          <h3 class="text-sm font-semibold uppercase tracking-wider text-fq-muted">Market Data Sources</h3>
-          <span id="data-toggle-icon" class="text-fq-muted text-xs">&#9654; Optional</span>
-        </button>
-        <div id="data-sources-panel" class="hidden mt-4 space-y-5">
-          <p class="text-xs text-fq-muted">
-            The engine uses Vegas lines, ADP, and player props to calibrate projections.
-            Defaults are loaded automatically — upload your own data for maximum accuracy.
-          </p>
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-fq-muted mb-3">Market Data</h3>
+        <div class="space-y-2 mb-4">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+            <span class="text-sm text-slate-300">ADP rankings</span>
+            <span class="text-xs text-fq-muted">&mdash; auto-generated for your scoring format via VOR</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+            <span class="text-sm text-slate-300">Vegas win totals</span>
+            <span class="text-xs text-fq-muted">&mdash; consensus lines built in</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+            <span class="text-sm text-slate-300">Player season props</span>
+            <span class="text-xs text-fq-muted">&mdash; derived from prior season actuals</span>
+          </div>
+        </div>
+        <p class="text-xs text-fq-muted mb-3">
+          All data is auto-calibrated for your league's scoring and roster settings.
+          ADP shifts automatically for PPR, TE premium, superflex, and league size.
+        </p>
 
-          <!-- Vegas / Odds API Key -->
+        <button type="button" id="data-toggle"
+                class="text-xs text-fq-accent hover:text-blue-400 transition-colors">
+          Advanced: use your own data &#9654;
+        </button>
+        <div id="data-sources-panel" class="hidden mt-4 space-y-4 pt-4 border-t border-fq-border">
+          <!-- Odds API Key -->
           <div>
             <label class="block text-xs text-fq-muted mb-1">
               Odds API Key
@@ -166,51 +183,38 @@
                    class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm font-mono"
                    autocomplete="off">
             <div class="text-[10px] text-fq-muted mt-1">
-              Get a free key at <span class="text-fq-accent">the-odds-api.com</span> &mdash;
-              or upload a win totals file below.
+              Get a free key at <span class="text-fq-accent">the-odds-api.com</span>
             </div>
           </div>
 
           <!-- File uploads -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label class="block text-xs text-fq-muted mb-1">ADP Data</label>
-              <div class="relative">
-                <input type="file" id="adp-file" accept=".csv,.json"
-                       class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
-                              file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
-                              hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
-                              rounded px-2 py-1.5">
-              </div>
-              <div id="adp-status" class="text-[10px] text-fq-muted mt-1">
-                CSV: player_id, adp &mdash; Auto: prior season rankings
-              </div>
+              <label class="block text-xs text-fq-muted mb-1">Override ADP</label>
+              <input type="file" id="adp-file" accept=".csv,.json"
+                     class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
+                            file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
+                            hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
+                            rounded px-2 py-1.5">
+              <div id="adp-status" class="text-[10px] text-fq-muted mt-1">CSV: player_id, adp</div>
             </div>
             <div>
-              <label class="block text-xs text-fq-muted mb-1">Win Totals</label>
-              <div class="relative">
-                <input type="file" id="wintotals-file" accept=".csv,.json"
-                       class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
-                              file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
-                              hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
-                              rounded px-2 py-1.5">
-              </div>
-              <div id="wintotals-status" class="text-[10px] text-fq-muted mt-1">
-                CSV: team, win_total &mdash; Auto: consensus lines
-              </div>
+              <label class="block text-xs text-fq-muted mb-1">Override Win Totals</label>
+              <input type="file" id="wintotals-file" accept=".csv,.json"
+                     class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
+                            file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
+                            hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
+                            rounded px-2 py-1.5">
+              <div id="wintotals-status" class="text-[10px] text-fq-muted mt-1">CSV: team, win_total</div>
             </div>
             <div>
-              <label class="block text-xs text-fq-muted mb-1">Player Props</label>
-              <div class="relative">
-                <input type="file" id="props-file" accept=".csv,.json"
-                       class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
-                              file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
-                              hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
-                              rounded px-2 py-1.5">
-              </div>
-              <div id="props-status" class="text-[10px] text-fq-muted mt-1">
-                CSV: player_id, season_total &mdash; Auto: prior season actuals
-              </div>
+              <label class="block text-xs text-fq-muted mb-1">Override Player Props</label>
+              <input type="file" id="props-file" accept=".csv,.json"
+                     class="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0
+                            file:text-xs file:font-medium file:bg-fq-accent/20 file:text-fq-accent
+                            hover:file:bg-fq-accent/30 cursor-pointer bg-fq-bg border border-fq-border
+                            rounded px-2 py-1.5">
+              <div id="props-status" class="text-[10px] text-fq-muted mt-1">CSV: player_id, season_total</div>
             </div>
           </div>
         </div>

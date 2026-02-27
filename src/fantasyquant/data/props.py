@@ -87,46 +87,50 @@ def _find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
 def _derive_from_historical(config: EngineConfig) -> dict[str, float]:
     """Use prior season actuals from nfl_data_py as prop proxies.
 
-    This gives the system real per-player season totals to anchor
-    projections against, rather than leaving volume_anchor as a no-op.
+    Uses the canonical ``compute_fantasy_points()`` from historical.py
+    so scoring is consistent everywhere (PPR, TE premium, etc).
     """
     try:
+        from fantasyquant.data.historical import (
+            FANTASY_POSITIONS,
+            _COLUMN_MAP,
+            compute_fantasy_points,
+        )
         import nfl_data_py as nfl
     except ImportError:
         return {}
 
     try:
         season = config.current_season - 1
-        weekly = nfl.import_weekly_data([season])
-        if weekly is None or weekly.empty:
+        raw = nfl.import_weekly_data([season])
+        if raw is None or raw.empty:
             return {}
 
-        fantasy_positions = {"QB", "RB", "WR", "TE"}
-        weekly = weekly[weekly["position"].isin(fantasy_positions)]
-        weekly = weekly[weekly["week"] <= config.nfl_weeks]
+        raw = raw[raw["position"].isin(FANTASY_POSITIONS)]
+        raw = raw[raw["week"] <= config.nfl_weeks]
 
-        # Compute fantasy points using league scoring.
-        scoring = config.scoring
-        pts = (
-            weekly["passing_yards"].fillna(0) * scoring.passing_yards
-            + weekly["passing_tds"].fillna(0) * scoring.passing_tds
-            + weekly["interceptions"].fillna(0) * scoring.interceptions
-            + weekly["rushing_yards"].fillna(0) * scoring.rushing_yards
-            + weekly["rushing_tds"].fillna(0) * scoring.rushing_tds
-            + weekly["receptions"].fillna(0) * scoring.receptions
-            + weekly["receiving_yards"].fillna(0) * scoring.receiving_yards
-            + weekly["receiving_tds"].fillna(0) * scoring.receiving_tds
-            + weekly.get("sack_fumbles_lost", pd.Series(0, index=weekly.index)).fillna(0) * scoring.fumbles_lost
-        )
+        # Rename columns to match compute_fantasy_points expectations.
+        if "player_display_name" in raw.columns and "player_name" in raw.columns:
+            raw = raw.drop(columns=["player_name"])
+        available = {k: v for k, v in _COLUMN_MAP.items() if k in raw.columns}
+        seen: set[str] = set()
+        target_cols: list[str] = []
+        for v in available.values():
+            if v not in seen:
+                target_cols.append(v)
+                seen.add(v)
+        df = raw.rename(columns=available)[target_cols].copy()
 
-        # TE premium.
-        if scoring.te_reception_bonus != 0.0 and "position" in weekly.columns:
-            te_mask = weekly["position"] == "TE"
-            pts = pts + te_mask * weekly["receptions"].fillna(0) * scoring.te_reception_bonus
+        for col in (
+            "passing_yards", "passing_tds", "interceptions",
+            "rushing_yards", "rushing_tds", "receptions",
+            "receiving_yards", "receiving_tds", "fumbles_lost",
+        ):
+            if col not in df.columns:
+                df[col] = 0.0
 
-        weekly = weekly.copy()
-        weekly["fpts"] = pts
-        season_totals = weekly.groupby("player_id")["fpts"].sum()
+        df["fpts"] = compute_fantasy_points(df, config.scoring)
+        season_totals = df.groupby("player_id")["fpts"].sum()
 
         # Only include players with meaningful production (> 20 pts/season).
         season_totals = season_totals[season_totals > 20.0]
