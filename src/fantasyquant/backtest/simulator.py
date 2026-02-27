@@ -1,9 +1,9 @@
 """Draft + season simulator for backtesting.
 
-Simulates an entire fantasy season:
+Simulates an entire fantasy season per Becker & Sun (2013) Section 6:
 1. Train the prediction engine on prior seasons.
 2. Simulate a snake draft where opponents pick by ADP.
-3. Set optimal lineups each week using the engine's projections.
+3. Set optimal lineups each week using position-constrained optimizer (Section 4.4).
 4. Score each week against *actual* points to measure performance.
 """
 
@@ -15,10 +15,12 @@ import numpy as np
 import pandas as pd
 
 from fantasyquant.config import EngineConfig, DEFAULT_CONFIG
+from fantasyquant.optimization.lineup import set_lineup
 from fantasyquant.optimization.solver import (
     DraftSolver,
     DraftState,
     PlayerPool,
+    estimate_beta,
 )
 
 
@@ -33,7 +35,7 @@ class SeasonResult:
     """Our team's actual score each week."""
 
     weekly_opponent_scores: dict[int, float]
-    """Simulated opponent score each week (league-median proxy)."""
+    """Simulated opponent score each week."""
 
     wins: int = 0
     losses: int = 0
@@ -57,38 +59,12 @@ def _simulate_opponent_picks(
     return list(available.index[:n_picks])
 
 
-def _set_optimal_lineup(
-    roster_pids: list[str],
-    actual_points: pd.DataFrame,
-    week: int,
-    config: EngineConfig,
-) -> float:
-    """Given a roster and actual points, set the best possible lineup
-    for *week* and return the score.
-
-    Uses a greedy approach: fill required positions first, then flex.
-    """
-    r = config.roster
-    scores: dict[str, float] = {}
-    for pid in roster_pids:
-        try:
-            scores[pid] = float(actual_points.at[pid, week])
-        except (KeyError, ValueError):
-            scores[pid] = 0.0
-
-    # We need position info — embed it in actual_points index or pass separately.
-    # For simplicity, return the sum of top-N scorers on the roster.
-    # (A more rigorous version would enforce positional constraints.)
-    vals = sorted(scores.values(), reverse=True)
-    n_starters = r.starters
-    return sum(vals[:n_starters])
-
-
 def simulate_season(
     pool: PlayerPool,
     actual_weekly: pd.DataFrame,
     config: EngineConfig = DEFAULT_CONFIG,
     my_slot: int = 1,
+    position_lookup: dict[str, str] | None = None,
 ) -> SeasonResult:
     """Run a full draft simulation + season scoring.
 
@@ -103,6 +79,8 @@ def simulate_season(
         Engine configuration.
     my_slot:
         Our draft position (1-indexed).
+    position_lookup:
+        {player_id: position} mapping. If None, built from pool.info.
 
     Returns
     -------
@@ -117,7 +95,15 @@ def simulate_season(
 
     adp = pool.adp if pool.adp is not None else pd.Series(dtype=float)
 
+    # Build position lookup.
+    if position_lookup is None:
+        position_lookup = dict(
+            zip(pool.info["player_id"], pool.info["position"]),
+        )
+
     # --- Snake draft simulation ---
+    beta_cache: dict[int, float] | None = None
+
     for pick_num in range(1, total_picks + 1):
         state.current_pick = pick_num
         rnd = (pick_num - 1) // n_teams + 1
@@ -129,36 +115,63 @@ def simulate_season(
             is_my_pick = pos_in_round == (n_teams - my_slot + 1)
 
         if is_my_pick:
-            rec = solver.solve(state)
+            # Re-estimate β(t) at each of our picks (per paper).
+            beta_cache = estimate_beta(state, pool, config)
+            rec = solver.solve(state, beta=beta_cache)
             if rec is not None:
                 state.my_picks.append(rec.player_id)
                 state.taken.add(rec.player_id)
-            # else: couldn't find a pick — roster might be full
         else:
             # Opponent picks by ADP.
             opp_picks = _simulate_opponent_picks(adp, state.taken, 1)
             for pid in opp_picks:
                 state.taken.add(pid)
 
-    # --- Season scoring ---
+    # --- Season scoring with position-constrained lineups (Section 4.4) ---
     roster = state.my_picks
     weekly_scores: dict[int, float] = {}
     weekly_opp: dict[int, float] = {}
 
     for w in range(1, config.nfl_weeks + 1):
-        my_score = _set_optimal_lineup(roster, actual_weekly, w, config)
-        weekly_scores[w] = my_score
+        # Our score: position-constrained optimal lineup using actuals.
+        my_scores = {}
+        for pid in roster:
+            try:
+                my_scores[pid] = float(actual_weekly.at[pid, w])
+            except (KeyError, ValueError):
+                my_scores[pid] = 0.0
 
-        # Opponent proxy: median score of all other possible rosters.
-        # Simplified: take the median of all player scores that week.
-        all_scores = actual_weekly[w].dropna() if w in actual_weekly.columns else pd.Series([0.0])
-        sorted_scores = all_scores.sort_values(ascending=False)
-        # Rough opponent score: sum of players ranked around the median roster.
+        _, my_total = set_lineup(roster, my_scores, position_lookup, config)
+        weekly_scores[w] = my_total
+
+        # Opponent proxy: build a "median team" from non-roster players,
+        # set their optimal lineup, use that as the opponent score.
+        all_player_scores = (
+            actual_weekly[w].dropna()
+            if w in actual_weekly.columns
+            else pd.Series([0.0])
+        )
+        non_roster = [
+            pid for pid in all_player_scores.index if pid not in set(roster)
+        ]
+        # Sort by score and take the "5th team" worth of players as opponent.
+        sorted_non_roster = sorted(
+            non_roster, key=lambda p: all_player_scores.get(p, 0.0), reverse=True,
+        )
         mid = n_teams // 2
         start = mid * config.roster.starters
         end = start + config.roster.starters
-        opp_score = float(sorted_scores.iloc[start:end].sum()) if len(sorted_scores) > end else 0.0
-        weekly_opp[w] = opp_score
+        opp_roster_slice = sorted_non_roster[start:end] if len(sorted_non_roster) > end else sorted_non_roster[:config.roster.starters]
+
+        opp_scores_map = {
+            pid: float(all_player_scores.get(pid, 0.0))
+            for pid in opp_roster_slice
+        }
+        opp_positions = {pid: position_lookup.get(pid, "RB") for pid in opp_roster_slice}
+        _, opp_total = set_lineup(
+            opp_roster_slice, opp_scores_map, opp_positions, config,
+        )
+        weekly_opp[w] = opp_total
 
     wins = sum(1 for w in weekly_scores if weekly_scores[w] > weekly_opp.get(w, 0))
     losses = len(weekly_scores) - wins
@@ -211,9 +224,18 @@ def backtest(
     actual_matrix, actual_info = build_stat_matrix(test_df, stat="fantasy_points")
 
     # Reshape actual_matrix: flatten multi-level columns to just week ints.
-    # build_stat_matrix produces (season, week) column tuples.
     actual_matrix.columns = [w for _, w in actual_matrix.columns]
     actual_matrix.index = actual_info["player_id"]
+
+    # Build position lookup from actual info.
+    position_lookup = dict(
+        zip(actual_info["player_id"], actual_info["position"]),
+    )
+    # Also add from projections info for players only in training data.
+    for _, row in output.player_info.iterrows():
+        pid = row["player_id"]
+        if pid not in position_lookup:
+            position_lookup[pid] = row["position"]
 
     # Build ADP proxy from historical usage (players ranked by total points).
     total_pts = actual_matrix.sum(axis=1).sort_values(ascending=False)
@@ -229,4 +251,7 @@ def backtest(
         adp=adp_proxy,
     )
 
-    return simulate_season(pool, actual_matrix, config, my_slot)
+    return simulate_season(
+        pool, actual_matrix, config, my_slot,
+        position_lookup=position_lookup,
+    )

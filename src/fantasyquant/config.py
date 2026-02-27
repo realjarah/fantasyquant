@@ -72,12 +72,20 @@ class PredictionConfig:
 
 @dataclass(frozen=True)
 class OptimizationConfig:
-    """Tunables for the MIP solver."""
+    """Tunables for the MIP solver.
 
-    lambda_wins: float = 1.0
-    lambda_points: float = 0.1
+    Follows Becker & Sun (2013) notation:
+        λ₀ × total_points  +  λ₁ × regular_wins  +  λ₂ × playoff_wins
+    """
+
+    lambda_points: float = 1.0       # λ₀: total fantasy points
+    lambda_wins: float = 100.0       # λ₁: regular season wins (weeks 1-15)
+    lambda_playoff: float = 150.0    # λ₂: playoff wins (weeks 16-17)
+    alpha: float = 1.0               # opponent-draft uncertainty (constraint 1b)
     adp_uncertainty_rounds: float = 1.5  # rounds of ADP slack
     solver_time_limit_seconds: int = 30
+    regular_season_weeks: int = 15   # weeks 1-15 are regular season
+    playoff_weeks: tuple[int, ...] = (16, 17)
 
 
 # ---------------------------------------------------------------------------
