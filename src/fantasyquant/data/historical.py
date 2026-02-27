@@ -6,9 +6,13 @@ DataFrame with one row per player-week and computed fantasy points.
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from fantasyquant.config import EngineConfig, DEFAULT_CONFIG, ScoringSettings
+
+logger = logging.getLogger(__name__)
 
 # Positions we care about for fantasy purposes.
 FANTASY_POSITIONS = {"QB", "RB", "WR", "TE"}
@@ -90,7 +94,21 @@ def load_weekly_stats(
         start = end - config.prediction.training_seasons + 1
         seasons = list(range(start, end + 1))
 
-    raw = nfl.import_weekly_data(seasons)
+    # nfl_data_py hosts parquet files per season; recently completed
+    # seasons may not be uploaded yet.  Load each year individually
+    # and skip any that aren't available.
+    frames = []
+    for yr in seasons:
+        try:
+            frames.append(nfl.import_weekly_data([yr]))
+        except Exception:
+            logger.warning("Weekly data for %d not available — skipping", yr)
+    if not frames:
+        raise RuntimeError(
+            f"No weekly data available for any of seasons {seasons}. "
+            "Check your internet connection or try again later."
+        )
+    raw = pd.concat(frames, ignore_index=True)
 
     # Keep only fantasy-relevant positions and regular season (weeks 1-17/18).
     raw = raw[raw["position"].isin(FANTASY_POSITIONS)]

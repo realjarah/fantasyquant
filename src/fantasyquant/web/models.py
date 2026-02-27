@@ -120,6 +120,7 @@ class DraftStateResponse(BaseModel):
     my_roster: list[RosterPlayer]
     roster_needs: dict[str, int]
     config_summary: str
+    error_message: str | None = None
 
 
 # ---------------------------------------------------------------------------

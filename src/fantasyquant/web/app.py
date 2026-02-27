@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -87,8 +90,10 @@ def _load_projections_async(session: DraftSession) -> None:
             adp=result.adp,
         )
         session.initialize(pool)
-    except Exception:
-        session.status = SessionStatus.LOADING
+    except Exception as exc:
+        logger.exception("Failed to load projections for session %s", session.session_id)
+        session.error_message = str(exc)
+        session.status = SessionStatus.ERROR
 
 
 def _get_session_or_404(session_id: str) -> DraftSession:
@@ -182,6 +187,7 @@ async def api_get_state(session_id: str):
         my_roster=session.get_my_roster(),
         roster_needs=session.get_roster_needs(),
         config_summary=session.config_summary,
+        error_message=session.error_message,
     )
 
 

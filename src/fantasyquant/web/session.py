@@ -30,6 +30,7 @@ class SessionStatus(str, Enum):
     READY = "ready"
     DRAFTING = "drafting"
     COMPLETE = "complete"
+    ERROR = "error"
 
 
 @dataclass
@@ -52,6 +53,8 @@ class DraftSession:
     loop: DraftLoop | None = None
     picks: list[PickEntry] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    error_message: str | None = None
 
     # Data source params (stored so background thread can use them).
     odds_api_key: str | None = None
