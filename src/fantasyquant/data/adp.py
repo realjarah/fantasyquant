@@ -170,64 +170,88 @@ def _ffc_teams(config: EngineConfig) -> int:
     return 14
 
 
-def _fetch_live_adp(config: EngineConfig) -> pd.Series | None:
-    """Fetch live ADP from Fantasy Football Calculator's public API.
-
-    Returns format-specific ADP (PPR, half-PPR, standard, 2QB, superflex)
-    matched to the user's league settings.  Results are cached for 1 hour.
-
-    The API returns player names which we cross-reference against
-    nfl_data_py's player roster to map to player_ids.
-    """
-    fmt = _scoring_to_ffc_format(config)
-    teams = _ffc_teams(config)
-    year = config.current_season
-    key = _cache_key(fmt, teams, year)
-
-    # Check cache.
-    if key in _ADP_CACHE:
-        ts, cached = _ADP_CACHE[key]
-        if time.time() - ts < _CACHE_TTL_SECONDS:
-            return cached
-
+def _fetch_ffc_year(fmt: str, teams: int, year: int) -> list[dict] | None:
+    """Fetch one year's data from FFC.  Returns the players list or None."""
     try:
         url = f"{_FFC_BASE}/{fmt}"
         params = {"teams": teams, "year": year}
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-
+        if data.get("status") == "Error":
+            return None
         players = data.get("players", [])
-        if not players:
-            return None
-
-        # Build name → ADP mapping from API response.
-        name_adp: dict[str, float] = {}
-        for p in players:
-            name = p.get("name", "")
-            adp_val = p.get("adp")
-            if name and adp_val is not None:
-                name_adp[name] = float(adp_val)
-
-        if not name_adp:
-            return None
-
-        # Cross-reference with nfl_data_py roster to get player_ids.
-        adp_series = _match_names_to_ids(name_adp, config)
-
-        if adp_series is not None and len(adp_series) > 0:
-            _ADP_CACHE[key] = (time.time(), adp_series)
-            logger.info(
-                "Loaded live %s ADP for %d-team leagues (%d players)",
-                fmt.upper(), teams, len(adp_series),
-            )
-            return adp_series
-
-        return None
-
+        return players if players else None
     except (requests.RequestException, json.JSONDecodeError, KeyError):
-        logger.debug("Live ADP fetch failed, will fall back to VOR", exc_info=True)
         return None
+
+
+def _fetch_live_adp(config: EngineConfig) -> pd.Series | None:
+    """Fetch live ADP from Fantasy Football Calculator's public API.
+
+    Returns format-specific ADP (PPR, half-PPR, standard, 2QB, superflex)
+    matched to the user's league settings.  Results are cached for 1 hour.
+
+    Tries the upcoming season first; if the API doesn't have data yet
+    (common in the off-season, Jan-Jul), falls back to the most recent
+    available year.
+
+    The API returns player names which we cross-reference against
+    nfl_data_py's player roster to map to player_ids.
+    """
+    fmt = _scoring_to_ffc_format(config)
+    teams = _ffc_teams(config)
+    target_year = config.current_season
+
+    # Check cache for the target year.
+    key = _cache_key(fmt, teams, target_year)
+    if key in _ADP_CACHE:
+        ts, cached = _ADP_CACHE[key]
+        if time.time() - ts < _CACHE_TTL_SECONDS:
+            return cached
+
+    # Try target year first, then fall back up to 2 years.
+    players = None
+    used_year = target_year
+    for year in [target_year, target_year - 1, target_year - 2]:
+        players = _fetch_ffc_year(fmt, teams, year)
+        if players:
+            used_year = year
+            break
+
+    if not players:
+        logger.debug("No live ADP data available from FFC for %d–%d", target_year - 2, target_year)
+        return None
+
+    if used_year != target_year:
+        logger.info(
+            "FFC does not have %d ADP yet — using %d data as the latest available",
+            target_year, used_year,
+        )
+
+    # Build name → ADP mapping from API response.
+    name_adp: dict[str, float] = {}
+    for p in players:
+        name = p.get("name", "")
+        adp_val = p.get("adp")
+        if name and adp_val is not None:
+            name_adp[name] = float(adp_val)
+
+    if not name_adp:
+        return None
+
+    # Cross-reference with nfl_data_py roster to get player_ids.
+    adp_series = _match_names_to_ids(name_adp, config)
+
+    if adp_series is not None and len(adp_series) > 0:
+        _ADP_CACHE[key] = (time.time(), adp_series)
+        logger.info(
+            "Loaded live %s ADP for %d-team leagues (%d players, %d data)",
+            fmt.upper(), teams, len(adp_series), used_year,
+        )
+        return adp_series
+
+    return None
 
 
 def _match_names_to_ids(
@@ -236,7 +260,8 @@ def _match_names_to_ids(
 ) -> pd.Series | None:
     """Map player display names from FFC to nfl_data_py player_ids.
 
-    Uses fuzzy matching: normalize both sides to lowercase, strip
+    Uses ``nfl.import_ids()`` — the canonical cross-platform ID table —
+    and fuzzy matching: normalize both sides to lowercase, strip
     suffixes (Jr., III, etc.), and match.
     """
     try:
@@ -245,22 +270,21 @@ def _match_names_to_ids(
         return None
 
     try:
-        roster = nfl.import_rosters([config.current_season])
-        if roster is None or roster.empty:
-            # Try prior season if current not available yet.
-            roster = nfl.import_rosters([config.current_season - 1])
-        if roster is None or roster.empty:
+        ids = nfl.import_ids()
+        if ids is None or ids.empty:
             return None
 
-        # Build normalized name → player_id lookup.
+        # Build normalized name → gsis_id lookup.
         id_lookup: dict[str, str] = {}
-        for _, row in roster.iterrows():
-            pid = row.get("player_id") or row.get("gsis_id", "")
-            # Try multiple name columns.
-            for col in ["player_name", "full_name"]:
+        for _, row in ids.iterrows():
+            pid = row.get("gsis_id", "")
+            if not pid or pd.isna(pid):
+                continue
+            pid = str(pid)
+            for col in ["name", "merge_name"]:
                 name = row.get(col, "")
-                if name and pid:
-                    id_lookup[_normalize_name(str(name))] = str(pid)
+                if name and not pd.isna(name):
+                    id_lookup[_normalize_name(str(name))] = pid
 
         # Match FFC names to player_ids.
         matched: dict[str, float] = {}

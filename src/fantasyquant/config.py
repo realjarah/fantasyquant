@@ -7,7 +7,21 @@ management.  Users configure via a ``league.json`` file or CLI flags.
 
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, field
+
+
+def _upcoming_season() -> int:
+    """Return the upcoming NFL season year.
+
+    The NFL season runs Sep–Feb.  Once the Super Bowl is over (early Feb),
+    attention shifts to the next season: free agency, the draft, and
+    fantasy prep.  We use the current calendar year from February onward;
+    only in January (while the playoffs / Super Bowl are still on) do we
+    reference the prior year's season.
+    """
+    today = datetime.date.today()
+    return today.year if today.month >= 2 else today.year - 1
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +154,7 @@ class EngineConfig:
     prediction: PredictionConfig = field(default_factory=PredictionConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     nfl_weeks: int = 17
-    current_season: int = 2025
+    current_season: int = field(default_factory=_upcoming_season)
     platform: str = "custom"   # e.g. "espn", "yahoo", "sleeper", "nfl"
 
 
