@@ -1,30 +1,55 @@
 """Average Draft Position data loading.
 
 ADP is the market signal — it tells the solver what other drafters are
-likely to do, which drives constraint (1b) and β(t) estimation.
+likely to do, which drives constraint (1b) and β(t) estimation in the
+Becker & Sun (2013) formulation.
 
-Sources (in priority order):
-  1. User-provided CSV/JSON file
-  2. Scoring-format-aware VOR ranking derived from prior season
-     actuals via nfl_data_py (automatic, no user input needed)
-  3. Projection-derived fallback ranking
+The paper uses **live ADP / Expert Consensus Rankings** — a
+forward-looking market signal — not backward-looking stats.  Our
+priority chain reflects this:
 
-The default path (source 2) produces ADP that is **specific to the
-user's exact scoring and roster settings**: PPR weight, TE premium,
-passing TD points, superflex, team count — all flow into a Value Over
-Replacement (VOR) calculation that shifts positional rankings to match
-how each format changes draft capital.
+  1. User-provided CSV/JSON file (explicit override)
+  2. **Live market ADP** from Fantasy Football Calculator's public API,
+     matched to the user's scoring format and league size
+  3. VOR-derived ranking from prior season actuals (off-season fallback
+     when no live ADP is available yet)
+  4. Projection-derived ranking (last resort)
+
+The live ADP path (source 2) is format-specific: PPR, half-PPR,
+standard, 2QB — each returns different rankings because the drafting
+market prices players differently across formats.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import time
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 from fantasyquant.config import EngineConfig, DEFAULT_CONFIG
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ADP cache (one fetch per format per process lifetime, or TTL-based)
+# ---------------------------------------------------------------------------
+
+_ADP_CACHE: dict[str, tuple[float, pd.Series]] = {}
+_CACHE_TTL_SECONDS = 3600  # 1 hour
+
+
+def _cache_key(format_str: str, teams: int, year: int) -> str:
+    return f"{format_str}:{teams}:{year}"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def load_adp(
     source: str | Path | None = None,
@@ -33,7 +58,7 @@ def load_adp(
     platform: str | None = None,
     projections: pd.DataFrame | None = None,
 ) -> pd.Series | None:
-    """Load ADP data, automatically adjusted for scoring format.
+    """Load ADP data — live market rankings by default.
 
     Parameters
     ----------
@@ -41,10 +66,10 @@ def load_adp(
         Path to a CSV (columns: ``player_id``, ``adp``) or JSON
         (``{"player_id": adp, ...}``).  When provided, used as-is.
     config:
-        Engine configuration.  The scoring and roster settings drive the
-        automatic VOR-based ADP derivation.
+        Engine configuration.  Scoring and roster settings determine
+        which ADP format to fetch (PPR, half-PPR, standard, 2QB).
     platform:
-        Override platform for ADP population (not used in auto mode).
+        Override platform hint (not currently used for API selection).
     projections:
         If provided and no other source available, derive ADP from
         total projected points (highest projected = ADP 1).
@@ -55,21 +80,30 @@ def load_adp(
         Indexed by player_id, values are ADP rank (1-indexed float).
         Returns None only if no data source is available.
     """
-    # 1. User-provided file — use exactly as given.
+    # 1. User-provided file — explicit override.
     if source is not None:
         return _load_from_file(Path(source))
 
-    # 2. Scoring-format-aware VOR ranking from nfl_data_py.
+    # 2. Live market ADP from public API.
+    adp = _fetch_live_adp(config)
+    if adp is not None and len(adp) > 0:
+        return adp
+
+    # 3. VOR-derived from prior season actuals (off-season fallback).
     adp = _derive_vor_adp(config)
     if adp is not None and len(adp) > 0:
         return adp
 
-    # 3. Fallback: derive from projections.
+    # 4. Projection-derived (last resort).
     if projections is not None and len(projections) > 0:
         return _derive_from_projections(projections)
 
     return None
 
+
+# ---------------------------------------------------------------------------
+# Source 1: User file
+# ---------------------------------------------------------------------------
 
 def _load_from_file(path: Path) -> pd.Series:
     """Load ADP from a local CSV or JSON file."""
@@ -77,12 +111,10 @@ def _load_from_file(path: Path) -> pd.Series:
         data = json.loads(path.read_text())
         return pd.Series(data, dtype=float, name="adp")
 
-    # CSV: expect columns player_id, adp.
     df = pd.read_csv(path)
     if "player_id" in df.columns and "adp" in df.columns:
         return pd.Series(df["adp"].values, index=df["player_id"].values, name="adp", dtype=float)
 
-    # Alternative column names.
     id_col = _find_column(df, ["player_id", "id", "sleeper_id", "gsis_id"])
     adp_col = _find_column(df, ["adp", "avg_pick", "average_pick", "overall"])
     if id_col and adp_col:
@@ -92,7 +124,6 @@ def _load_from_file(path: Path) -> pd.Series:
 
 
 def _find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Find the first matching column name (case-insensitive)."""
     lower = {c.lower(): c for c in df.columns}
     for c in candidates:
         if c.lower() in lower:
@@ -101,7 +132,171 @@ def _find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# VOR-based ADP derivation (scoring + roster aware)
+# Source 2: Live market ADP (Fantasy Football Calculator API)
+# ---------------------------------------------------------------------------
+
+_FFC_BASE = "https://fantasyfootballcalculator.com/api/v1/adp"
+
+
+def _scoring_to_ffc_format(config: EngineConfig) -> str:
+    """Map our scoring settings to FFC's format string.
+
+    FFC supports: standard, ppr, half-ppr, 2qb, superflex, dynasty,
+    idp, rookie.
+    """
+    roster = config.roster
+    scoring = config.scoring
+
+    # Superflex / 2QB take priority — they dominate ADP shape.
+    if roster.superflex > 0:
+        return "superflex"
+    if roster.qb >= 2:
+        return "2qb"
+
+    # PPR weight.
+    if scoring.receptions >= 0.8:
+        return "ppr"
+    if scoring.receptions >= 0.3:
+        return "half-ppr"
+    return "standard"
+
+
+def _ffc_teams(config: EngineConfig) -> int:
+    """Snap to nearest FFC-supported team count (8, 10, 12, 14)."""
+    teams = config.roster.teams
+    for n in [8, 10, 12, 14]:
+        if teams <= n:
+            return n
+    return 14
+
+
+def _fetch_live_adp(config: EngineConfig) -> pd.Series | None:
+    """Fetch live ADP from Fantasy Football Calculator's public API.
+
+    Returns format-specific ADP (PPR, half-PPR, standard, 2QB, superflex)
+    matched to the user's league settings.  Results are cached for 1 hour.
+
+    The API returns player names which we cross-reference against
+    nfl_data_py's player roster to map to player_ids.
+    """
+    fmt = _scoring_to_ffc_format(config)
+    teams = _ffc_teams(config)
+    year = config.current_season
+    key = _cache_key(fmt, teams, year)
+
+    # Check cache.
+    if key in _ADP_CACHE:
+        ts, cached = _ADP_CACHE[key]
+        if time.time() - ts < _CACHE_TTL_SECONDS:
+            return cached
+
+    try:
+        url = f"{_FFC_BASE}/{fmt}"
+        params = {"teams": teams, "year": year}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        players = data.get("players", [])
+        if not players:
+            return None
+
+        # Build name → ADP mapping from API response.
+        name_adp: dict[str, float] = {}
+        for p in players:
+            name = p.get("name", "")
+            adp_val = p.get("adp")
+            if name and adp_val is not None:
+                name_adp[name] = float(adp_val)
+
+        if not name_adp:
+            return None
+
+        # Cross-reference with nfl_data_py roster to get player_ids.
+        adp_series = _match_names_to_ids(name_adp, config)
+
+        if adp_series is not None and len(adp_series) > 0:
+            _ADP_CACHE[key] = (time.time(), adp_series)
+            logger.info(
+                "Loaded live %s ADP for %d-team leagues (%d players)",
+                fmt.upper(), teams, len(adp_series),
+            )
+            return adp_series
+
+        return None
+
+    except (requests.RequestException, json.JSONDecodeError, KeyError):
+        logger.debug("Live ADP fetch failed, will fall back to VOR", exc_info=True)
+        return None
+
+
+def _match_names_to_ids(
+    name_adp: dict[str, float],
+    config: EngineConfig,
+) -> pd.Series | None:
+    """Map player display names from FFC to nfl_data_py player_ids.
+
+    Uses fuzzy matching: normalize both sides to lowercase, strip
+    suffixes (Jr., III, etc.), and match.
+    """
+    try:
+        import nfl_data_py as nfl
+    except ImportError:
+        return None
+
+    try:
+        roster = nfl.import_rosters([config.current_season])
+        if roster is None or roster.empty:
+            # Try prior season if current not available yet.
+            roster = nfl.import_rosters([config.current_season - 1])
+        if roster is None or roster.empty:
+            return None
+
+        # Build normalized name → player_id lookup.
+        id_lookup: dict[str, str] = {}
+        for _, row in roster.iterrows():
+            pid = row.get("player_id") or row.get("gsis_id", "")
+            # Try multiple name columns.
+            for col in ["player_name", "full_name"]:
+                name = row.get(col, "")
+                if name and pid:
+                    id_lookup[_normalize_name(str(name))] = str(pid)
+
+        # Match FFC names to player_ids.
+        matched: dict[str, float] = {}
+        for name, adp_val in name_adp.items():
+            norm = _normalize_name(name)
+            pid = id_lookup.get(norm)
+            if pid:
+                matched[pid] = adp_val
+
+        if not matched:
+            return None
+
+        return pd.Series(matched, dtype=float, name="adp").sort_values()
+
+    except Exception:
+        return None
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a player name for fuzzy matching.
+
+    Strips suffixes, punctuation, and lowercases.
+    """
+    name = name.lower().strip()
+    # Remove common suffixes.
+    for suffix in [" jr.", " jr", " sr.", " sr", " iii", " ii", " iv", " v"]:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    # Remove punctuation.
+    name = name.replace(".", "").replace("'", "").replace("-", " ")
+    # Collapse whitespace.
+    return " ".join(name.split())
+
+
+# ---------------------------------------------------------------------------
+# Source 3: VOR-based ADP (off-season / live-data fallback)
 # ---------------------------------------------------------------------------
 
 def _replacement_level(config: EngineConfig) -> dict[str, float]:
@@ -119,9 +314,6 @@ def _replacement_level(config: EngineConfig) -> dict[str, float]:
     r = config.roster
     n = r.teams
 
-    # Flex slots are shared among RB/WR/TE.  Empirically:
-    #   ~50% of flex spots go to RB, ~40% WR, ~10% TE.
-    # In superflex, ~70% of teams start a QB there.
     flex_rb = 0.50 * r.flex
     flex_wr = 0.40 * r.flex
     flex_te = 0.10 * r.flex
@@ -142,13 +334,8 @@ def _replacement_level(config: EngineConfig) -> dict[str, float]:
 def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
     """Compute VOR-based ADP from prior season actuals.
 
-    Steps:
-      1. Load prior season weekly stats via nfl_data_py
-      2. Score each week using the user's exact scoring settings
-      3. Sum season totals per player
-      4. Compute replacement level per position from roster settings
-      5. VOR = season_total - replacement_level(position)
-      6. Rank by VOR descending -> ADP
+    Used as an off-season fallback when live market ADP is not yet
+    available (e.g., January–June before preseason drafts begin).
     """
     try:
         from fantasyquant.data.historical import (
@@ -169,7 +356,6 @@ def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
         raw = raw[raw["position"].isin(FANTASY_POSITIONS)]
         raw = raw[raw["week"] <= config.nfl_weeks]
 
-        # Rename columns to match compute_fantasy_points expectations.
         if "player_display_name" in raw.columns and "player_name" in raw.columns:
             raw = raw.drop(columns=["player_name"])
         available = {k: v for k, v in _COLUMN_MAP.items() if k in raw.columns}
@@ -181,7 +367,6 @@ def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
                 seen.add(v)
         df = raw.rename(columns=available)[target_cols].copy()
 
-        # Ensure stat columns exist.
         for col in (
             "passing_yards", "passing_tds", "interceptions",
             "rushing_yards", "rushing_tds", "receptions",
@@ -190,20 +375,15 @@ def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
             if col not in df.columns:
                 df[col] = 0.0
 
-        # Score with user's exact settings (PPR, TE premium, 6pt pass, etc).
         df["fpts"] = compute_fantasy_points(df, config.scoring)
 
-        # Season totals per player.
         season_totals = df.groupby("player_id")["fpts"].sum()
         player_positions = df.groupby("player_id")["position"].first()
 
-        # Only keep players with meaningful production.
         season_totals = season_totals[season_totals > 20.0]
 
-        # Compute replacement level for each position.
         repl = _replacement_level(config)
 
-        # Find actual replacement-level score for each position.
         repl_scores: dict[str, float] = {}
         for pos, rank in repl.items():
             pos_players = season_totals[player_positions == pos].sort_values(ascending=False)
@@ -215,14 +395,12 @@ def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
             else:
                 repl_scores[pos] = 0.0
 
-        # VOR = total - replacement_level(position).
         vor = pd.Series(dtype=float, name="vor")
         for pid, total in season_totals.items():
             pos = player_positions.get(pid, "")
             baseline = repl_scores.get(pos, 0.0)
             vor[pid] = total - baseline
 
-        # Rank by VOR descending -> ADP (rank 1 = highest VOR).
         vor = vor.sort_values(ascending=False)
         adp = pd.Series(
             range(1, len(vor) + 1),
@@ -235,6 +413,10 @@ def _derive_vor_adp(config: EngineConfig) -> pd.Series | None:
     except Exception:
         return None
 
+
+# ---------------------------------------------------------------------------
+# Source 4: Projection-derived (last resort)
+# ---------------------------------------------------------------------------
 
 def _derive_from_projections(projections: pd.DataFrame) -> pd.Series:
     """Derive ADP ranking from total projected points (highest = rank 1)."""

@@ -350,8 +350,9 @@ async def api_data_sources():
     """Describe available data sources and their expected formats."""
     return {
         "adp": {
-            "description": "Average Draft Position data",
-            "auto_fallback": "Prior season performance via nfl_data_py, then projection-derived ranking",
+            "description": "Average Draft Position — live market data",
+            "auto_source": "Fantasy Football Calculator API (format + team-count specific)",
+            "auto_fallback": "VOR-derived from prior season actuals (off-season)",
             "csv_columns": ["player_id", "adp"],
             "json_format": '{"player_id": adp_rank, ...}',
         },

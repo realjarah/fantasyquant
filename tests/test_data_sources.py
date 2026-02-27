@@ -85,6 +85,156 @@ class TestLoadAdp:
 
 
 # -----------------------------------------------------------------------
+# Live ADP fetcher tests
+# -----------------------------------------------------------------------
+
+
+class TestScoringToFfcFormat:
+    """Tests that scoring/roster settings map to correct FFC API format."""
+
+    def test_ppr(self):
+        from fantasyquant.data.adp import _scoring_to_ffc_format
+
+        config = EngineConfig(scoring=ScoringSettings(receptions=1.0))
+        assert _scoring_to_ffc_format(config) == "ppr"
+
+    def test_half_ppr(self):
+        from fantasyquant.data.adp import _scoring_to_ffc_format
+
+        config = EngineConfig(scoring=ScoringSettings(receptions=0.5))
+        assert _scoring_to_ffc_format(config) == "half-ppr"
+
+    def test_standard(self):
+        from fantasyquant.data.adp import _scoring_to_ffc_format
+
+        config = EngineConfig(scoring=ScoringSettings(receptions=0.0))
+        assert _scoring_to_ffc_format(config) == "standard"
+
+    def test_superflex_overrides_ppr(self):
+        from fantasyquant.data.adp import _scoring_to_ffc_format
+
+        config = EngineConfig(
+            scoring=ScoringSettings(receptions=1.0),
+            roster=RosterSettings(superflex=1),
+        )
+        assert _scoring_to_ffc_format(config) == "superflex"
+
+    def test_two_qb(self):
+        from fantasyquant.data.adp import _scoring_to_ffc_format
+
+        config = EngineConfig(roster=RosterSettings(qb=2))
+        assert _scoring_to_ffc_format(config) == "2qb"
+
+
+class TestFfcTeams:
+    """Tests for team count snapping to FFC-supported values."""
+
+    def test_snap_to_nearest(self):
+        from fantasyquant.data.adp import _ffc_teams
+
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=8))) == 8
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=10))) == 10
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=12))) == 12
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=14))) == 14
+
+    def test_odd_sizes_snap_up(self):
+        from fantasyquant.data.adp import _ffc_teams
+
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=9))) == 10
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=11))) == 12
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=6))) == 8
+
+    def test_large_leagues_cap_at_14(self):
+        from fantasyquant.data.adp import _ffc_teams
+
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=16))) == 14
+        assert _ffc_teams(EngineConfig(roster=RosterSettings(teams=20))) == 14
+
+
+class TestNormalizeName:
+    """Tests for player name normalization used in ADP matching."""
+
+    def test_basic(self):
+        from fantasyquant.data.adp import _normalize_name
+
+        assert _normalize_name("Patrick Mahomes") == "patrick mahomes"
+        assert _normalize_name("Patrick Mahomes II") == "patrick mahomes"
+        assert _normalize_name("Travis Kelce") == "travis kelce"
+
+    def test_suffixes_stripped(self):
+        from fantasyquant.data.adp import _normalize_name
+
+        assert _normalize_name("Marvin Harrison Jr.") == "marvin harrison"
+        assert _normalize_name("Odell Beckham Jr") == "odell beckham"
+        assert _normalize_name("Robert Griffin III") == "robert griffin"
+
+    def test_punctuation(self):
+        from fantasyquant.data.adp import _normalize_name
+
+        assert _normalize_name("Ja'Marr Chase") == "jamarr chase"
+        assert _normalize_name("D.K. Metcalf") == "dk metcalf"
+        assert _normalize_name("De'Von Achane") == "devon achane"
+
+
+class TestLiveAdpFetch:
+    """Integration test for live ADP (may fail if API is unreachable)."""
+
+    def test_fetch_returns_series_or_none(self):
+        from fantasyquant.data.adp import _fetch_live_adp
+
+        config = EngineConfig(scoring=ScoringSettings(receptions=1.0))
+        result = _fetch_live_adp(config)
+        # May return None if API is down or no data for current year.
+        if result is not None:
+            assert isinstance(result, pd.Series)
+            assert result.name == "adp"
+            assert len(result) > 0
+
+    def test_caching_works(self):
+        from fantasyquant.data.adp import _ADP_CACHE, _fetch_live_adp, _cache_key, _scoring_to_ffc_format, _ffc_teams
+
+        config = EngineConfig(scoring=ScoringSettings(receptions=1.0))
+        fmt = _scoring_to_ffc_format(config)
+        teams = _ffc_teams(config)
+        key = _cache_key(fmt, teams, config.current_season)
+
+        # Clear cache.
+        _ADP_CACHE.pop(key, None)
+
+        first = _fetch_live_adp(config)
+        if first is not None:
+            # Second call should use cache.
+            assert key in _ADP_CACHE
+            second = _fetch_live_adp(config)
+            assert second is not None
+
+
+class TestLoadAdpPriorityChain:
+    """Test the full priority chain: file > live > VOR > projections."""
+
+    def test_file_takes_priority(self, tmp_path):
+        from fantasyquant.data.adp import load_adp
+
+        csv = tmp_path / "adp.csv"
+        csv.write_text("player_id,adp\nA,1.0\nB,2.0\n")
+        result = load_adp(str(csv))
+        assert len(result) == 2
+        assert float(result["A"]) == 1.0
+
+    def test_without_file_returns_something(self):
+        from fantasyquant.data.adp import load_adp
+
+        proj = pd.DataFrame(
+            {"w1": [100, 50], "w2": [110, 60]},
+            index=["X", "Y"],
+        )
+        result = load_adp(projections=proj)
+        # Should get data from live, VOR, or projection fallback.
+        assert result is not None
+        assert len(result) >= 2
+
+
+# -----------------------------------------------------------------------
 # VOR-based ADP tests (scoring + roster aware)
 # -----------------------------------------------------------------------
 
