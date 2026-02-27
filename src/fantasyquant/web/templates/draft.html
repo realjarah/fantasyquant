@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}FantasyQuant — Draft Room{% endblock %}
+
+{% block body %}
+<div class="h-full flex flex-col" id="draft-app"
+     data-session-id="{{ session_id }}"
+     data-my-slot="{{ my_slot }}"
+     data-total-teams="{{ total_teams }}"
+     data-total-rounds="{{ total_rounds }}">
+
+  <!-- Header bar -->
+  <header class="border-b border-fq-border px-4 py-2 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-4">
+      <h1 class="text-sm font-bold tracking-tight">FantasyQuant</h1>
+      <span class="text-xs text-fq-muted font-mono">{{ config_summary }}</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="text-right">
+        <div class="text-xs text-fq-muted">Pick</div>
+        <div id="pick-counter" class="text-sm font-mono font-bold">#1</div>
+      </div>
+      <div class="text-right">
+        <div class="text-xs text-fq-muted">Round</div>
+        <div id="round-counter" class="text-sm font-mono font-bold">1 / {{ total_rounds }}</div>
+      </div>
+      <div id="clock-badge" class="hidden bg-fq-green/20 text-fq-green text-xs font-bold px-3 py-1 rounded-full">
+        YOUR PICK
+      </div>
+      <div id="loading-badge" class="bg-fq-amber/20 text-fq-amber text-xs font-mono px-3 py-1 rounded-full">
+        Loading projections...
+      </div>
+    </div>
+  </header>
+
+  <!-- Main layout: three columns -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- Left: Player pool -->
+    <div class="w-80 border-r border-fq-border flex flex-col shrink-0">
+      <div class="p-3 border-b border-fq-border space-y-2">
+        <input type="text" id="player-search" placeholder="Search players..."
+               class="w-full bg-fq-bg border border-fq-border rounded px-3 py-1.5 text-sm"
+               autocomplete="off">
+        <div class="flex gap-1">
+          <button class="pos-filter px-2 py-1 text-xs rounded border border-fq-border hover:border-fq-accent active"
+                  data-pos="">ALL</button>
+          <button class="pos-filter px-2 py-1 text-xs rounded border border-fq-border hover:border-fq-accent"
+                  data-pos="QB">QB</button>
+          <button class="pos-filter px-2 py-1 text-xs rounded border border-fq-border hover:border-fq-accent"
+                  data-pos="RB">RB</button>
+          <button class="pos-filter px-2 py-1 text-xs rounded border border-fq-border hover:border-fq-accent"
+                  data-pos="WR">WR</button>
+          <button class="pos-filter px-2 py-1 text-xs rounded border border-fq-border hover:border-fq-accent"
+                  data-pos="TE">TE</button>
+        </div>
+      </div>
+      <div id="player-list" class="flex-1 overflow-y-auto scrollbar-thin">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- Center: Draft log + pick input -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- Recommendation banner -->
+      <div id="rec-banner" class="hidden border-b border-fq-green/30 bg-fq-green/5 px-4 py-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs text-fq-green font-semibold uppercase tracking-wider mb-1">Solver Recommendation</div>
+            <div class="flex items-center gap-3">
+              <span id="rec-name" class="text-lg font-bold"></span>
+              <span id="rec-pos" class="text-xs font-mono bg-fq-card px-2 py-0.5 rounded"></span>
+              <span id="rec-team" class="text-xs text-fq-muted"></span>
+            </div>
+            <div class="text-xs text-fq-muted mt-1">
+              <span>E[wins]: <span id="rec-wins" class="text-slate-300"></span></span>
+              <span class="mx-2">|</span>
+              <span>E[pts]: <span id="rec-pts" class="text-slate-300"></span></span>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button id="rec-accept" class="bg-fq-green hover:bg-green-600 text-white text-sm font-semibold
+                           px-4 py-2 rounded transition-colors">
+              Draft Player
+            </button>
+          </div>
+        </div>
+        <div id="rec-alts" class="mt-2 text-xs text-fq-muted hidden">
+          Also consider: <span id="rec-alt-names"></span>
+        </div>
+      </div>
+
+      <!-- Draft log -->
+      <div id="draft-log" class="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-1">
+        <div class="text-center text-fq-muted text-sm py-8">Draft will appear here as picks are made.</div>
+      </div>
+
+      <!-- Pick input -->
+      <div class="border-t border-fq-border p-3">
+        <div class="flex gap-2">
+          <input type="text" id="pick-input" placeholder="Enter player name to record pick..."
+                 class="flex-1 bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm"
+                 autocomplete="off">
+          <button id="pick-btn"
+                  class="bg-fq-accent hover:bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded
+                         transition-colors">
+            Record Pick
+          </button>
+          <button id="auto-pick-btn"
+                  class="hidden bg-fq-green hover:bg-green-600 text-white text-sm font-semibold px-4 py-2
+                         rounded transition-colors">
+            Auto Pick
+          </button>
+        </div>
+        <div id="pick-error" class="text-xs text-fq-red mt-1 hidden"></div>
+      </div>
+    </div>
+
+    <!-- Right: My roster -->
+    <div class="w-72 border-l border-fq-border flex flex-col shrink-0">
+      <div class="p-3 border-b border-fq-border">
+        <h3 class="text-sm font-semibold">My Roster</h3>
+        <div class="text-xs text-fq-muted">Slot {{ my_slot }} / {{ total_teams }}</div>
+      </div>
+      <div id="roster-panel" class="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
+        <!-- Populated by JS -->
+      </div>
+      <div class="border-t border-fq-border p-3">
+        <div id="roster-needs" class="text-xs text-fq-muted space-y-1">
+          <!-- Populated by JS -->
+        </div>
+        <button id="view-summary-btn"
+                class="hidden w-full mt-3 bg-fq-accent hover:bg-blue-600 text-white text-sm font-semibold
+                       px-4 py-2 rounded transition-colors">
+          View Draft Summary
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/draft.js"></script>
+{% endblock %}

@@ -309,3 +309,36 @@ def multipliers(win_totals: str | None, output: str | None) -> None:
         click.echo("------+--------")
         for team, val in mults.items():
             click.echo(f"{team:5s} | {val:.3f}")
+
+
+# ------------------------------------------------------------------
+# serve
+# ------------------------------------------------------------------
+
+@main.command()
+@click.option("--host", default="0.0.0.0", show_default=True,
+              help="Bind address.")
+@click.option("--port", default=8000, show_default=True, type=int,
+              help="Port to listen on.")
+@click.option("--reload", "do_reload", is_flag=True, default=False,
+              help="Enable auto-reload for development.")
+def serve(host: str, port: int, do_reload: bool) -> None:
+    """Launch the FantasyQuant web draft room."""
+    import uvicorn
+
+    click.echo("Starting FantasyQuant web server...")
+    click.echo(f"  http://{host}:{port}")
+
+    from fantasyquant.web.payment import is_dev_mode
+    if is_dev_mode():
+        click.echo("  Mode: DEVELOPMENT (no payment required)")
+        click.echo("  Set STRIPE_SECRET_KEY to enable payment")
+    else:
+        click.echo("  Mode: PRODUCTION (Stripe payments enabled)")
+
+    uvicorn.run(
+        "fantasyquant.web.app:app",
+        host=host,
+        port=port,
+        reload=do_reload,
+    )

@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}FantasyQuant — Configure Your Draft{% endblock %}
+
+{% block body %}
+<div class="min-h-full flex flex-col">
+  <!-- Header -->
+  <header class="border-b border-fq-border px-6 py-4">
+    <div class="max-w-4xl mx-auto flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-bold tracking-tight">FantasyQuant</h1>
+        <p class="text-sm text-fq-muted">Institutional-grade draft intelligence</p>
+      </div>
+      {% if dev_mode %}
+      <span class="text-xs bg-fq-amber/20 text-fq-amber px-2 py-1 rounded font-mono">DEV MODE</span>
+      {% endif %}
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="flex-1 max-w-4xl mx-auto w-full px-6 py-8">
+    <div class="mb-8">
+      <h2 class="text-2xl font-bold mb-2">Configure your league</h2>
+      <p class="text-fq-muted">Select a preset or customize your scoring and roster rules.</p>
+    </div>
+
+    <form id="config-form" class="space-y-8">
+      <!-- Preset selector -->
+      <div>
+        <label class="block text-sm font-medium mb-3">Platform Preset</label>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2" id="preset-grid">
+          {% for name, desc in presets.items() %}
+          <button type="button"
+                  class="preset-btn text-left px-3 py-2 rounded border border-fq-border hover:border-fq-accent
+                         text-sm transition-colors"
+                  data-preset="{{ name }}">
+            <div class="font-medium text-slate-100 truncate">{{ name }}</div>
+            <div class="text-xs text-fq-muted truncate">{{ desc }}</div>
+          </button>
+          {% endfor %}
+        </div>
+        <input type="hidden" id="selected-preset" name="preset" value="">
+      </div>
+
+      <!-- Scoring overrides -->
+      <div class="bg-fq-card rounded-lg border border-fq-border p-5">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-fq-muted mb-4">Scoring</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Reception Points</label>
+            <select id="receptions" class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+              <option value="1.0">PPR (1.0)</option>
+              <option value="0.5">Half-PPR (0.5)</option>
+              <option value="0.0">Standard (0.0)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Passing TD</label>
+            <select id="passing-tds" class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+              <option value="4">4 pts</option>
+              <option value="6">6 pts</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">TE Premium</label>
+            <select id="te-bonus" class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+              <option value="0">None</option>
+              <option value="0.5">+0.5 per rec</option>
+              <option value="1.0">+1.0 per rec</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Roster overrides -->
+      <div class="bg-fq-card rounded-lg border border-fq-border p-5">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-fq-muted mb-4">Roster</h3>
+        <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-4">
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Teams</label>
+            <input type="number" id="teams" value="12" min="4" max="20"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Rounds</label>
+            <input type="number" id="rounds" value="15" min="5" max="25"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">QB</label>
+            <input type="number" id="qb" value="1" min="0" max="3"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">RB</label>
+            <input type="number" id="rb" value="2" min="0" max="4"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">WR</label>
+            <input type="number" id="wr" value="2" min="0" max="4"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">TE</label>
+            <input type="number" id="te" value="1" min="0" max="3"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">FLEX</label>
+            <input type="number" id="flex" value="1" min="0" max="3"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Superflex</label>
+            <input type="number" id="superflex" value="0" min="0" max="2"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">Bench</label>
+            <input type="number" id="bench" value="6" min="0" max="12"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">DST</label>
+            <input type="number" id="dst" value="1" min="0" max="2"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-xs text-fq-muted mb-1">K</label>
+            <input type="number" id="k" value="1" min="0" max="2"
+                   class="w-full bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          </div>
+        </div>
+      </div>
+
+      <!-- Draft position -->
+      <div class="bg-fq-card rounded-lg border border-fq-border p-5">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-fq-muted mb-4">Your Draft Position</h3>
+        <div class="flex items-center gap-4">
+          <input type="number" id="my-slot" value="1" min="1" max="20"
+                 class="w-24 bg-fq-bg border border-fq-border rounded px-3 py-2 text-sm">
+          <span class="text-sm text-fq-muted">of <span id="slot-max">12</span> teams (snake draft)</span>
+        </div>
+      </div>
+
+      <!-- Launch -->
+      <div class="flex items-center gap-4">
+        <button type="submit" id="launch-btn"
+                class="bg-fq-accent hover:bg-blue-600 text-white font-semibold px-8 py-3 rounded-lg
+                       transition-colors text-sm">
+          Start Draft
+        </button>
+        <span id="launch-status" class="text-sm text-fq-muted hidden"></span>
+      </div>
+    </form>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-fq-border px-6 py-3">
+    <div class="max-w-4xl mx-auto text-xs text-fq-muted text-center">
+      FantasyQuant &mdash; MIP-optimized draft intelligence
+    </div>
+  </footer>
+</div>
+
+<script src="/static/configure.js"></script>
+{% endblock %}
