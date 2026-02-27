@@ -39,7 +39,7 @@ class DraftLoop:
         self.solver = DraftSolver(pool, config)
         self.pool = pool
         self.config = config
-        self.state = DraftState()
+        self.state = DraftState(my_slot=my_slot)
         self.my_slot = my_slot  # 1-indexed draft position
         self.total_teams = config.roster.teams
         self.total_rounds = config.roster.rounds

@@ -53,6 +53,7 @@ class DraftState:
 
     current_round: int = 1
     current_pick: int = 1  # overall pick number
+    my_slot: int = 1  # 1-indexed draft slot
 
     @property
     def my_roster_size(self) -> int:
@@ -180,37 +181,21 @@ class DraftSolver:
         return remaining.sort_values()
 
     def _snake_pick_numbers(self, state: DraftState) -> list[int]:
-        """Compute the DM's remaining overall pick numbers in the snake draft.
-
-        Needed for constraint (1b) to know how many opponents pick
-        between our successive picks.
-        """
+        """Compute the DM's remaining overall pick numbers in the snake draft."""
         n_teams = self.config.roster.teams
         n_rounds = self.config.roster.rounds
         total_picks = n_teams * n_rounds
+        slot = state.my_slot  # 1-indexed
 
-        # We need to figure out our slot from current_pick and round.
-        # For now, derive from state.my_roster_size and config.
-        # The caller should set this up, but we can infer:
-        my_picks_so_far = state.my_roster_size
-        # Reconstruct: we need slot position.  Assume slot is encoded
-        # in DraftState via external logic.  Fall back to returning
-        # evenly-spaced picks if we can't determine.
         our_picks: list[int] = []
-        # Scan all picks to find which ones are ours
-        # (this mirrors the snake logic in draft_loop/simulator).
-        for pick in range(1, total_picks + 1):
-            rnd = (pick - 1) // n_teams + 1
-            pos_in_round = (pick - 1) % n_teams + 1
-            # We can't know our slot here without it being passed in.
-            # Use a simple heuristic: our next picks are ~n_teams apart.
-            pass
+        for rnd in range(1, n_rounds + 1):
+            if rnd % 2 == 1:  # odd round → normal order
+                pick = (rnd - 1) * n_teams + slot
+            else:  # even round → reversed
+                pick = (rnd - 1) * n_teams + (n_teams - slot + 1)
+            if pick >= state.current_pick:
+                our_picks.append(pick)
 
-        # Simplified: return picks spaced by n_teams from current_pick.
-        pick = state.current_pick
-        while pick <= total_picks:
-            our_picks.append(pick)
-            pick += n_teams
         return our_picks
 
     def solve(
@@ -351,7 +336,10 @@ class DraftSolver:
 
         # --- Constraint (1c): positional minimums ---
         # γ_j = PosLimit(j) + 1 per paper's calibration.
-        target_size = state.my_roster_size + 1
+        # Build the FULL optimal roster per Draft_k, not just +1 player.
+        # Algorithm 1 then selects the most urgent pick from the
+        # recommended set (P_k \ owned).
+        target_size = roster.rounds
         pos_mins = {
             "QB": roster.qb + 1,
             "RB": roster.rb + 1,
@@ -369,7 +357,7 @@ class DraftSolver:
                 if pids_at_pos:
                     prob += pulp.lpSum(y[pid] for pid in pids_at_pos) >= mn
 
-        # --- Roster size: exactly (currently owned + 1 new pick) ---
+        # --- Roster size: full roster (total draft rounds) ---
         prob += pulp.lpSum(y[pid] for pid in candidate_ids) == target_size
 
         # Players already owned MUST stay (1g).
@@ -457,7 +445,7 @@ class DraftSolver:
             return None
 
         # ===============================================================
-        # Algorithm 1: Pick by Rₖ from the recommended set Pₖ
+        # Algorithm 1 (revised): Pick by urgency-weighted value
         # ===============================================================
         # Pₖ = {i : yᵢ = 1, i ∉ DMPlayer(k)} — newly recommended players.
         recommended_set = [
@@ -471,21 +459,22 @@ class DraftSolver:
         if not recommended_set:
             return None
 
-        # Select the player from Pₖ with the best (lowest) rank in Rₖ.
-        # This ensures robustness: we pick the player most likely to be
-        # taken by opponents if we don't pick them now.
-        best_pid = None
-        best_rank = float("inf")
-        for pid in recommended_set:
-            r = ranking.get(pid, float("inf"))
-            if r < best_rank:
-                best_rank = r
-                best_pid = pid
+        # --- Rank candidates by urgency × value ---
+        # Urgency = probability the player gets taken before our next
+        # pick.  Value = season projection minus positional replacement.
+        our_picks = self._snake_pick_numbers(state)
+        next_pick = our_picks[1] if len(our_picks) > 1 else state.current_pick + n_teams
+        picks_until_next = next_pick - state.current_pick
 
-        if best_pid is None:
-            best_pid = recommended_set[0]
+        ranked = self._rank_by_urgency(
+            recommended_set, ranking, state, picks_until_next,
+            id_to_pos,
+        )
+        best_pid = ranked[0]
+        # Store sorted set so alternatives are meaningful.
+        recommended_set = ranked
 
-        # Compute summary stats.
+        # --- Compute summary stats ---
         exp_wins = 0.0
         for w in range(1, self.weeks + 1):
             v = pulp.value(z[w])
@@ -507,3 +496,74 @@ class DraftSolver:
             objective_value=float(pulp.value(prob.objective) or 0.0),
             recommended_set=recommended_set,
         )
+
+    def _rank_by_urgency(
+        self,
+        recommended_set: list[str],
+        ranking: pd.Series,
+        state: DraftState,
+        picks_until_next: int,
+        id_to_pos: dict[str, str],
+    ) -> list[str]:
+        """Sort the MIP's recommended set by urgency-weighted value.
+
+        Score = urgency × marginal_value
+
+        Urgency:  For a player with ADP rank R among remaining players,
+        if R <= picks_until_next they're almost certainly gone → urgency ~ 1.
+        If R >> picks_until_next they'll be available later → urgency ~ 0.
+        Uses a logistic curve centered at picks_until_next.
+
+        Marginal value:  Player's season total projected points relative
+        to the best *replacement* at the same position available at our
+        next pick (VOR = value over replacement).
+        """
+        proj = self.pool.projections
+
+        # Position-grouped remaining players by ADP rank.
+        pos_ranked: dict[str, list[tuple[str, float]]] = {}
+        for pid in ranking.index:
+            if pid in state.taken:
+                continue
+            pos = id_to_pos.get(pid, "")
+            if pos not in pos_ranked:
+                pos_ranked[pos] = []
+            pos_ranked[pos].append((pid, ranking.get(pid, 999.0)))
+
+        # For each position, find the replacement-level player:
+        # the best player at that position who'd still be available
+        # at our next pick.
+        replacement_pts: dict[str, float] = {}
+        for pos, players in pos_ranked.items():
+            players_sorted = sorted(players, key=lambda x: x[1])
+            # ~1/4 of picks go to each position.
+            repl_idx = min(len(players_sorted) - 1,
+                           max(0, picks_until_next // 4))
+            repl_pid = players_sorted[repl_idx][0]
+            try:
+                replacement_pts[pos] = float(proj.loc[repl_pid].sum())
+            except (KeyError, ValueError):
+                replacement_pts[pos] = 0.0
+
+        scored: list[tuple[str, float]] = []
+
+        for pid in recommended_set:
+            adp_rank = ranking.get(pid, float("inf"))
+            pos = id_to_pos.get(pid, "")
+
+            # Urgency: logistic curve centered at picks_until_next.
+            k = 0.3  # steepness
+            urgency = 1.0 / (1.0 + np.exp(-k * (picks_until_next - adp_rank + 1)))
+
+            # Marginal value: season total minus replacement at same position.
+            try:
+                player_total = float(proj.loc[pid].sum())
+            except (KeyError, ValueError):
+                player_total = 0.0
+            repl = replacement_pts.get(pos, 0.0)
+            marginal = max(player_total - repl, 0.0)
+
+            scored.append((pid, urgency * marginal))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [pid for pid, _ in scored]
