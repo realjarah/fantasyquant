@@ -41,6 +41,10 @@ class CreateSessionRequest(BaseModel):
     roster: RosterInput | None = None
     platform: str = "custom"
     my_slot: int = Field(1, ge=1, description="Draft position, 1-indexed.")
+    odds_api_key: str | None = Field(None, description="The Odds API key for live Vegas lines.")
+    adp_source: str | None = Field(None, description="Session-uploaded ADP file reference.")
+    win_totals_source: str | None = Field(None, description="Session-uploaded win totals file.")
+    player_props_source: str | None = Field(None, description="Session-uploaded player props file.")
 
 
 class CreateSessionResponse(BaseModel):

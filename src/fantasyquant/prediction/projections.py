@@ -17,6 +17,7 @@ from fantasyquant.data.historical import (
     load_weekly_stats,
 )
 from fantasyquant.data.schedule import build_matchup_grid, load_schedule
+from fantasyquant.data.adp import load_adp
 from fantasyquant.data.vegas import load_player_props, load_win_totals
 from fantasyquant.prediction.alternating_min import (
     AlternatingMinimization,
@@ -46,12 +47,16 @@ class ProjectionOutput:
     w_final: pd.Series
     """Blended defensive multipliers."""
 
+    adp: pd.Series | None = None
+    """Average Draft Position data, indexed by player_id."""
+
 
 def build_projections(
     config: EngineConfig = DEFAULT_CONFIG,
     *,
     win_totals_source: str | None = None,
     player_props_source: str | None = None,
+    adp_source: str | None = None,
     odds_api_key: str | None = None,
     historical_df: pd.DataFrame | None = None,
 ) -> ProjectionOutput:
@@ -66,6 +71,9 @@ def build_projections(
         built-in defaults if not provided.
     player_props_source:
         Path to a JSON/CSV file with player season total props.
+    adp_source:
+        Path to a CSV/JSON file with ADP data.  Falls back to
+        nfl_data_py or projection-derived rankings.
     odds_api_key:
         API key for The Odds API (optional).
     historical_df:
@@ -87,7 +95,7 @@ def build_projections(
     matchup_grid = build_matchup_grid(schedule)
 
     win_totals = load_win_totals(source=win_totals_source, api_key=odds_api_key, config=config)
-    player_props = load_player_props(source=player_props_source)
+    player_props = load_player_props(source=player_props_source, config=config)
 
     # ---- 2. Alternating Minimisation ----
     altmin = AlternatingMinimization(config.prediction)
@@ -123,9 +131,17 @@ def build_projections(
     # ---- 6. Volume anchoring ----
     final = volume_anchor(raw, player_props)
 
+    # ---- 7. ADP data ----
+    adp = load_adp(
+        source=adp_source,
+        config=config,
+        projections=final,
+    )
+
     return ProjectionOutput(
         weekly_projections=final,
         player_info=player_info,
         decomposition=decomp,
         w_final=w_final,
+        adp=adp,
     )

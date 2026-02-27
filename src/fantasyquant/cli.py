@@ -156,6 +156,10 @@ def presets() -> None:
               help="Path to win totals JSON/CSV.")
 @click.option("--player-props", type=click.Path(exists=True), default=None,
               help="Path to player props JSON/CSV.")
+@click.option("--adp", type=click.Path(exists=True), default=None,
+              help="ADP data CSV/JSON.")
+@click.option("--odds-api-key", envvar="ODDS_API_KEY", default=None,
+              help="The Odds API key for live Vegas lines.")
 @click.option("--output", "-o", type=click.Path(), default="projections.csv",
               help="Output file for the f(i,t) matrix.")
 def project(
@@ -164,6 +168,8 @@ def project(
     season: int | None,
     win_totals: str | None,
     player_props: str | None,
+    adp: str | None,
+    odds_api_key: str | None,
     output: str,
 ) -> None:
     """Build the weekly projection matrix f(i,t)."""
@@ -180,6 +186,8 @@ def project(
         config,
         win_totals_source=win_totals,
         player_props_source=player_props,
+        adp_source=adp,
+        odds_api_key=odds_api_key,
     )
 
     result.weekly_projections.to_csv(output)
@@ -188,6 +196,11 @@ def project(
     info_path = Path(output).with_suffix(".info.csv")
     result.player_info.to_csv(info_path, index=False)
     click.echo(f"Wrote player metadata to {info_path}")
+
+    if result.adp is not None:
+        adp_path = Path(output).with_suffix(".adp.csv")
+        result.adp.to_csv(adp_path)
+        click.echo(f"Wrote ADP rankings for {len(result.adp)} players to {adp_path}")
 
 
 # ------------------------------------------------------------------
@@ -206,6 +219,12 @@ def project(
               help="Pre-built projections CSV. If omitted, builds fresh.")
 @click.option("--adp", type=click.Path(exists=True), default=None,
               help="ADP data CSV (columns: player_id, adp).")
+@click.option("--win-totals", type=click.Path(exists=True), default=None,
+              help="Win totals JSON/CSV.")
+@click.option("--player-props", type=click.Path(exists=True), default=None,
+              help="Player props JSON/CSV.")
+@click.option("--odds-api-key", envvar="ODDS_API_KEY", default=None,
+              help="The Odds API key for live Vegas lines.")
 def draft(
     preset: str | None,
     league_path: str | None,
@@ -213,6 +232,9 @@ def draft(
     slot: int,
     projections: str | None,
     adp: str | None,
+    win_totals: str | None,
+    player_props: str | None,
+    odds_api_key: str | None,
 ) -> None:
     """Launch the interactive draft assistant."""
     import pandas as pd
@@ -229,18 +251,24 @@ def draft(
         proj_df.columns = [int(c) for c in proj_df.columns]
         info_path = Path(projections).with_suffix(".info.csv")
         info_df = pd.read_csv(info_path) if info_path.exists() else pd.DataFrame()
+        adp_series = None
+        if adp:
+            adp_df = pd.read_csv(adp)
+            adp_series = pd.Series(adp_df["adp"].values, index=adp_df["player_id"])
     else:
         from fantasyquant.prediction.projections import build_projections
 
         click.echo("Building projections (this may take a minute)...")
-        result = build_projections(config)
+        result = build_projections(
+            config,
+            adp_source=adp,
+            win_totals_source=win_totals,
+            player_props_source=player_props,
+            odds_api_key=odds_api_key,
+        )
         proj_df = result.weekly_projections
         info_df = result.player_info
-
-    adp_series = None
-    if adp:
-        adp_df = pd.read_csv(adp)
-        adp_series = pd.Series(adp_df["adp"].values, index=adp_df["player_id"])
+        adp_series = result.adp
 
     pool = PlayerPool(projections=proj_df, info=info_df, adp=adp_series)
     loop = DraftLoop(pool, config, my_slot=slot)

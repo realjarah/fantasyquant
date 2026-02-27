@@ -87,27 +87,18 @@ def _fetch_win_totals_api(api_key: str, config: EngineConfig) -> dict[str, float
 
 
 # ---------------------------------------------------------------------------
-# Player Season Props
+# Player Season Props (delegated to data.props for richer fallbacks)
 # ---------------------------------------------------------------------------
-
-# Minimal example props — in production, scrape/ingest from a sportsbook.
-_DEFAULT_PLAYER_PROPS: dict[str, float] = {}
-
 
 def load_player_props(
     source: str | Path | None = None,
+    *,
+    config: EngineConfig = DEFAULT_CONFIG,
 ) -> dict[str, float]:
     """Return ``{player_id: season_fantasy_points_total}``.
 
-    If *source* points to a CSV, it should have columns
-    ``player_id, season_total``.
+    Delegates to ``data.props`` which supports file loading and
+    historical-season derivation as a fallback.
     """
-    if source is not None:
-        path = Path(source)
-        if path.suffix == ".csv":
-            df = pd.read_csv(path)
-            return dict(zip(df["player_id"], df["season_total"]))
-        if path.suffix == ".json":
-            return json.loads(Path(source).read_text())
-
-    return dict(_DEFAULT_PLAYER_PROPS)
+    from fantasyquant.data.props import load_player_props as _load_props
+    return _load_props(source, config=config)

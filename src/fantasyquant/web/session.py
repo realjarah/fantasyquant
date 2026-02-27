@@ -53,6 +53,12 @@ class DraftSession:
     picks: list[PickEntry] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
+    # Data source params (stored so background thread can use them).
+    odds_api_key: str | None = None
+    adp_source: str | None = None
+    win_totals_source: str | None = None
+    player_props_source: str | None = None
+
     @property
     def total_teams(self) -> int:
         return self.config.roster.teams
@@ -330,6 +336,10 @@ def create_session(request: CreateSessionRequest, config: EngineConfig) -> Draft
         session_id=session_id,
         config=config,
         my_slot=request.my_slot,
+        odds_api_key=request.odds_api_key,
+        adp_source=request.adp_source,
+        win_totals_source=request.win_totals_source,
+        player_props_source=request.player_props_source,
     )
     with _sessions_lock:
         _sessions[session_id] = session

@@ -8,6 +8,11 @@
   let presetData = {};
   let selectedPreset = null;
 
+  // Uploaded file references (server-side temp paths).
+  let uploadedAdpSource = null;
+  let uploadedWinTotalsSource = null;
+  let uploadedPropsSource = null;
+
   // -------------------------------------------------------------------
   // Load presets from API (to get scoring/roster details for auto-fill)
   // -------------------------------------------------------------------
@@ -91,6 +96,38 @@
   }
 
   // -------------------------------------------------------------------
+  // Data source file uploads
+  // -------------------------------------------------------------------
+
+  async function uploadFile(inputId, endpoint, statusId, refSetter) {
+    const input = document.getElementById(inputId);
+    const statusEl = document.getElementById(statusId);
+    if (!input.files.length) return;
+
+    const file = input.files[0];
+    const formData = new FormData();
+    formData.append("file", file);
+
+    statusEl.textContent = `Uploading ${file.name}...`;
+    statusEl.classList.remove("text-fq-muted");
+    statusEl.classList.add("text-fq-accent");
+
+    try {
+      const res = await fetch(endpoint, { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json();
+      refSetter(data);
+      statusEl.textContent = `Uploaded: ${file.name}`;
+      statusEl.classList.remove("text-fq-accent");
+      statusEl.classList.add("text-fq-green");
+    } catch (e) {
+      statusEl.textContent = `Upload failed: ${e.message}`;
+      statusEl.classList.remove("text-fq-accent");
+      statusEl.classList.add("text-fq-red");
+    }
+  }
+
+  // -------------------------------------------------------------------
   // Form submission
   // -------------------------------------------------------------------
 
@@ -130,6 +167,13 @@
       },
     };
 
+    // Data sources.
+    const oddsKey = document.getElementById("odds-api-key").value.trim();
+    if (oddsKey) body.odds_api_key = oddsKey;
+    if (uploadedAdpSource) body.adp_source = uploadedAdpSource;
+    if (uploadedWinTotalsSource) body.win_totals_source = uploadedWinTotalsSource;
+    if (uploadedPropsSource) body.player_props_source = uploadedPropsSource;
+
     try {
       const res = await fetch("/api/sessions", {
         method: "POST",
@@ -168,6 +212,33 @@
   document.getElementById("config-form").addEventListener("submit", (e) => {
     e.preventDefault();
     createSession();
+  });
+
+  // Data sources toggle.
+  document.getElementById("data-toggle").addEventListener("click", () => {
+    const panel = document.getElementById("data-sources-panel");
+    const icon = document.getElementById("data-toggle-icon");
+    panel.classList.toggle("hidden");
+    icon.textContent = panel.classList.contains("hidden") ? "\u25B6 Optional" : "\u25BC Expanded";
+  });
+
+  // File upload handlers.
+  document.getElementById("adp-file").addEventListener("change", () => {
+    uploadFile("adp-file", "/api/upload/adp", "adp-status", (data) => {
+      uploadedAdpSource = data.adp_source;
+    });
+  });
+
+  document.getElementById("wintotals-file").addEventListener("change", () => {
+    uploadFile("wintotals-file", "/api/upload/win-totals", "wintotals-status", (data) => {
+      uploadedWinTotalsSource = data.win_totals_source;
+    });
+  });
+
+  document.getElementById("props-file").addEventListener("change", () => {
+    uploadFile("props-file", "/api/upload/props", "props-status", (data) => {
+      uploadedPropsSource = data.player_props_source;
+    });
   });
 
   // -------------------------------------------------------------------

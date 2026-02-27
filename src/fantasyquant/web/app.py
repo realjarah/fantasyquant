@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -73,10 +74,17 @@ def _load_projections_async(session: DraftSession) -> None:
         from fantasyquant.prediction.projections import build_projections
         from fantasyquant.optimization.solver import PlayerPool
 
-        result = build_projections(session.config)
+        result = build_projections(
+            session.config,
+            win_totals_source=session.win_totals_source,
+            player_props_source=session.player_props_source,
+            adp_source=session.adp_source,
+            odds_api_key=session.odds_api_key,
+        )
         pool = PlayerPool(
             projections=result.weekly_projections,
             info=result.player_info,
+            adp=result.adp,
         )
         session.initialize(pool)
     except Exception:
@@ -298,3 +306,65 @@ async def api_presets():
             "roster": p.get("roster", {}),
         }
     return result
+
+
+# ---------------------------------------------------------------------------
+# File upload endpoints (data sources)
+# ---------------------------------------------------------------------------
+
+def _save_upload(upload: UploadFile, prefix: str) -> str:
+    """Save an uploaded file to a temp location and return the path."""
+    suffix = Path(upload.filename or "data.csv").suffix or ".csv"
+    fd = tempfile.NamedTemporaryFile(
+        prefix=f"fq_{prefix}_", suffix=suffix, delete=False,
+    )
+    content = upload.file.read()
+    fd.write(content)
+    fd.close()
+    return fd.name
+
+
+@app.post("/api/upload/adp")
+async def api_upload_adp(file: UploadFile):
+    """Upload an ADP CSV/JSON file. Returns a file reference to pass in session creation."""
+    path = _save_upload(file, "adp")
+    return {"adp_source": path, "filename": file.filename}
+
+
+@app.post("/api/upload/win-totals")
+async def api_upload_win_totals(file: UploadFile):
+    """Upload a team win totals CSV/JSON file."""
+    path = _save_upload(file, "wintotals")
+    return {"win_totals_source": path, "filename": file.filename}
+
+
+@app.post("/api/upload/props")
+async def api_upload_props(file: UploadFile):
+    """Upload a player props CSV/JSON file."""
+    path = _save_upload(file, "props")
+    return {"player_props_source": path, "filename": file.filename}
+
+
+@app.get("/api/data-sources")
+async def api_data_sources():
+    """Describe available data sources and their expected formats."""
+    return {
+        "adp": {
+            "description": "Average Draft Position data",
+            "auto_fallback": "Prior season performance via nfl_data_py, then projection-derived ranking",
+            "csv_columns": ["player_id", "adp"],
+            "json_format": '{"player_id": adp_rank, ...}',
+        },
+        "win_totals": {
+            "description": "Vegas team season win totals",
+            "auto_fallback": "Built-in consensus lines (updated each preseason) or The Odds API with API key",
+            "csv_columns": ["team", "win_total"],
+            "json_format": '{"KC": 11.5, "SF": 10.5, ...}',
+        },
+        "player_props": {
+            "description": "Player season fantasy point total props",
+            "auto_fallback": "Prior season actuals via nfl_data_py",
+            "csv_columns": ["player_id", "season_total"],
+            "json_format": '{"player_id": season_total, ...}',
+        },
+    }
