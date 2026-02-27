@@ -10,6 +10,7 @@ import click
 from fantasyquant.config import EngineConfig, DEFAULT_CONFIG
 from fantasyquant.league import (
     PRESETS,
+    describe_config,
     league_to_dict,
     list_presets,
     load_league,
@@ -18,16 +19,21 @@ from fantasyquant.league import (
 
 
 # ------------------------------------------------------------------
-# Shared option: --league
+# Shared: --league / --preset resolution
 # ------------------------------------------------------------------
 
 def _load_config(
-    league_path: str | None,
+    league_path: str | None = None,
+    preset: str | None = None,
     season: int | None = None,
 ) -> EngineConfig:
-    """Load config from --league file, falling back to defaults."""
-    if league_path:
-        config = load_league(league_path)
+    """Build config from --preset and/or --league file.
+
+    Layering: preset defaults → file overrides → CLI season override.
+    Either, both, or neither can be provided.
+    """
+    if league_path or preset:
+        config = load_league(league_path, preset=preset)
     else:
         config = EngineConfig()
     if season is not None:
@@ -129,16 +135,10 @@ def presets() -> None:
     """List available platform presets."""
     click.echo("Available presets:\n")
     for name in list_presets():
-        p = PRESETS[name]
-        scoring = p.get("scoring", {})
-        roster = p.get("roster", {})
-        rec = scoring.get("receptions", 1.0)
-        fmt = "PPR" if rec >= 1.0 else ("Half-PPR" if rec >= 0.5 else "Standard")
-        sf = "SF" if roster.get("superflex", 0) else ""
-        click.echo(
-            f"  {name:25s} {roster.get('teams', '?'):2d}-team  {fmt:9s} {sf}"
-        )
-    click.echo(f"\nUsage: fq init --preset <name>")
+        config = load_league(preset=name)
+        click.echo(f"  {name:27s} {describe_config(config)}")
+    click.echo(f"\nUsage: fq draft --preset <name>")
+    click.echo(f"       fq init --preset <name>  (to generate a league.json for customization)")
 
 
 # ------------------------------------------------------------------
@@ -146,8 +146,10 @@ def presets() -> None:
 # ------------------------------------------------------------------
 
 @main.command()
+@click.option("--preset", type=click.Choice(list_presets(), case_sensitive=False),
+              default=None, help="Platform preset (e.g. espn_ppr, sleeper_superflex).")
 @click.option("--league", "league_path", type=click.Path(exists=True), default=None,
-              help="Path to league.json configuration.")
+              help="Path to league.json (overrides preset values).")
 @click.option("--season", default=None, type=int,
               help="Override season year.")
 @click.option("--win-totals", type=click.Path(exists=True), default=None,
@@ -157,6 +159,7 @@ def presets() -> None:
 @click.option("--output", "-o", type=click.Path(), default="projections.csv",
               help="Output file for the f(i,t) matrix.")
 def project(
+    preset: str | None,
     league_path: str | None,
     season: int | None,
     win_totals: str | None,
@@ -166,12 +169,12 @@ def project(
     """Build the weekly projection matrix f(i,t)."""
     from fantasyquant.prediction.projections import build_projections
 
-    config = _load_config(league_path, season)
+    config = _load_config(league_path, preset, season)
     if season is None:
         season = config.current_season
 
     click.echo(f"Building projections for {season} season...")
-    click.echo(f"  Scoring: {config.scoring.reception_format}  |  Platform: {config.platform}")
+    click.echo(f"  {describe_config(config)}")
 
     result = build_projections(
         config,
@@ -192,8 +195,10 @@ def project(
 # ------------------------------------------------------------------
 
 @main.command()
+@click.option("--preset", type=click.Choice(list_presets(), case_sensitive=False),
+              default=None, help="Platform preset (e.g. espn_ppr, sleeper_superflex).")
 @click.option("--league", "league_path", type=click.Path(exists=True), default=None,
-              help="Path to league.json configuration.")
+              help="Path to league.json (overrides preset values).")
 @click.option("--season", default=None, type=int)
 @click.option("--slot", default=1, show_default=True,
               help="Your draft position (1-indexed).")
@@ -202,6 +207,7 @@ def project(
 @click.option("--adp", type=click.Path(exists=True), default=None,
               help="ADP data CSV (columns: player_id, adp).")
 def draft(
+    preset: str | None,
     league_path: str | None,
     season: int | None,
     slot: int,
@@ -214,11 +220,9 @@ def draft(
     from fantasyquant.optimization.draft_loop import DraftLoop
     from fantasyquant.optimization.solver import PlayerPool
 
-    config = _load_config(league_path, season)
+    config = _load_config(league_path, preset, season)
 
-    click.echo(f"  Platform: {config.platform}  |  {config.roster.teams}-team  |  {config.scoring.reception_format}")
-    if config.roster.superflex:
-        click.echo(f"  Superflex: Yes")
+    click.echo(f"  {describe_config(config)}")
 
     if projections:
         proj_df = pd.read_csv(projections, index_col=0)
@@ -248,23 +252,25 @@ def draft(
 # ------------------------------------------------------------------
 
 @main.command()
+@click.option("--preset", type=click.Choice(list_presets(), case_sensitive=False),
+              default=None, help="Platform preset (e.g. espn_ppr, sleeper_superflex).")
 @click.option("--league", "league_path", type=click.Path(exists=True), default=None,
-              help="Path to league.json configuration.")
+              help="Path to league.json (overrides preset values).")
 @click.option("--test-season", required=True, type=int,
               help="Season to test against (e.g. 2023).")
 @click.option("--slot", default=1, show_default=True,
               help="Simulated draft position.")
-def backtest(league_path: str | None, test_season: int, slot: int) -> None:
+def backtest(preset: str | None, league_path: str | None, test_season: int, slot: int) -> None:
     """Run a historical backtest."""
     from fantasyquant.backtest.simulator import backtest as run_backtest
 
-    config = _load_config(league_path, season=test_season)
+    config = _load_config(league_path, preset, season=test_season)
     train_end = test_season - 1
     train_start = train_end - config.prediction.training_seasons + 1
     training = list(range(train_start, train_end + 1))
 
     click.echo(f"Backtesting: train on {training}, test on {test_season}")
-    click.echo(f"  {config.scoring.reception_format}  |  {config.roster.teams}-team  |  Draft slot: {slot}")
+    click.echo(f"  {describe_config(config)}  |  Draft slot: {slot}")
 
     result = run_backtest(training, test_season, config, my_slot=slot)
 

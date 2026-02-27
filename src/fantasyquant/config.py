@@ -33,6 +33,7 @@ class ScoringSettings:
     fumbles_lost: float = -2.0
     two_point_conversions: float = 2.0
     passing_2pt: float = 2.0
+    te_reception_bonus: float = 0.0  # Extra per TE reception (e.g. 0.5 for TE premium)
 
     @property
     def reception_format(self) -> str:
@@ -41,6 +42,16 @@ class ScoringSettings:
         elif self.receptions >= 0.5:
             return "Half-PPR"
         return "Standard"
+
+    @property
+    def format_tag(self) -> str:
+        """Short human-readable tag, e.g. 'PPR TEP' or 'Half-PPR 6ptPass'."""
+        parts = [self.reception_format]
+        if self.te_reception_bonus > 0:
+            parts.append("TEP")
+        if self.passing_tds >= 6.0:
+            parts.append("6ptPass")
+        return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------

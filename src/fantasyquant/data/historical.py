@@ -36,8 +36,12 @@ _COLUMN_MAP = {
 
 
 def compute_fantasy_points(df: pd.DataFrame, scoring: ScoringSettings) -> pd.Series:
-    """Vectorised fantasy-point calculation."""
-    return (
+    """Vectorised fantasy-point calculation.
+
+    Handles position-dependent scoring (TE premium) when a ``position``
+    column is present.
+    """
+    pts = (
         df["passing_yards"].fillna(0) * scoring.passing_yards
         + df["passing_tds"].fillna(0) * scoring.passing_tds
         + df["interceptions"].fillna(0) * scoring.interceptions
@@ -48,6 +52,13 @@ def compute_fantasy_points(df: pd.DataFrame, scoring: ScoringSettings) -> pd.Ser
         + df["receiving_tds"].fillna(0) * scoring.receiving_tds
         + df["fumbles_lost"].fillna(0) * scoring.fumbles_lost
     )
+
+    # TE premium: extra points per TE reception.
+    if scoring.te_reception_bonus != 0.0 and "position" in df.columns:
+        te_mask = df["position"] == "TE"
+        pts = pts + te_mask * df["receptions"].fillna(0) * scoring.te_reception_bonus
+
+    return pts
 
 
 def load_weekly_stats(

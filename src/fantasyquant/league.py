@@ -59,152 +59,143 @@ from fantasyquant.config import (
 # Platform presets
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Reusable scoring / roster fragments
+# ---------------------------------------------------------------------------
+
+_SCORING_PPR = {
+    "passing_yards": 0.04, "passing_tds": 4.0, "interceptions": -2.0,
+    "rushing_yards": 0.1, "rushing_tds": 6.0,
+    "receptions": 1.0,
+    "receiving_yards": 0.1, "receiving_tds": 6.0, "fumbles_lost": -2.0,
+}
+_SCORING_HALF_PPR = {**_SCORING_PPR, "receptions": 0.5}
+_SCORING_STANDARD = {**_SCORING_PPR, "receptions": 0.0}
+
+_ESPN_ROSTER_10 = {
+    "teams": 10, "rounds": 16,
+    "qb": 1, "rb": 2, "wr": 2, "te": 1,
+    "flex": 1, "superflex": 0, "bench": 7, "dst": 1, "k": 1,
+}
+_ESPN_ROSTER_12 = {**_ESPN_ROSTER_10, "teams": 12, "bench": 6}
+
+_YAHOO_ROSTER_10 = {
+    "teams": 10, "rounds": 15,
+    "qb": 1, "rb": 2, "wr": 2, "te": 1,
+    "flex": 1, "superflex": 0, "bench": 5, "dst": 1, "k": 1,
+}
+_YAHOO_ROSTER_12 = {**_YAHOO_ROSTER_10, "teams": 12}
+
+_SLEEPER_ROSTER_12 = {
+    "teams": 12, "rounds": 15,
+    "qb": 1, "rb": 2, "wr": 2, "te": 1,
+    "flex": 1, "superflex": 0, "bench": 6, "dst": 1, "k": 0,
+}
+
+# ---------------------------------------------------------------------------
+# Platform presets
+# ---------------------------------------------------------------------------
+
 PRESETS: dict[str, dict[str, Any]] = {
+    # --- ESPN ---
     "espn_ppr": {
         "platform": "espn",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -2.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 1.0,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
-        "roster": {
-            "teams": 10,
-            "rounds": 16,
-            "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 7, "dst": 1, "k": 1,
-        },
+        "scoring": _SCORING_PPR,
+        "roster": _ESPN_ROSTER_10,
     },
     "espn_half_ppr": {
         "platform": "espn",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -2.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 0.5,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
-        "roster": {
-            "teams": 10,
-            "rounds": 16,
-            "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 7, "dst": 1, "k": 1,
-        },
+        "scoring": _SCORING_HALF_PPR,
+        "roster": _ESPN_ROSTER_10,
     },
+    "espn_standard": {
+        "platform": "espn",
+        "scoring": _SCORING_STANDARD,
+        "roster": _ESPN_ROSTER_10,
+    },
+    "espn_ppr_12": {
+        "platform": "espn",
+        "scoring": _SCORING_PPR,
+        "roster": _ESPN_ROSTER_12,
+    },
+    "espn_ppr_6pt_pass": {
+        "platform": "espn",
+        "scoring": {**_SCORING_PPR, "passing_tds": 6.0},
+        "roster": _ESPN_ROSTER_10,
+    },
+
+    # --- Yahoo ---
     "yahoo_half_ppr": {
         "platform": "yahoo",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -1.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 0.5,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
-        "roster": {
-            "teams": 10,
-            "rounds": 15,
-            "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 5, "dst": 1, "k": 1,
-        },
+        "scoring": {**_SCORING_HALF_PPR, "interceptions": -1.0},
+        "roster": _YAHOO_ROSTER_10,
     },
+    "yahoo_ppr": {
+        "platform": "yahoo",
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0},
+        "roster": _YAHOO_ROSTER_10,
+    },
+    "yahoo_half_ppr_12": {
+        "platform": "yahoo",
+        "scoring": {**_SCORING_HALF_PPR, "interceptions": -1.0},
+        "roster": _YAHOO_ROSTER_12,
+    },
+
+    # --- Sleeper ---
     "sleeper_ppr": {
         "platform": "sleeper",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -1.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 1.0,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
-        "roster": {
-            "teams": 12,
-            "rounds": 15,
-            "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 6, "dst": 1, "k": 0,
-        },
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0},
+        "roster": _SLEEPER_ROSTER_12,
+    },
+    "sleeper_ppr_tep": {
+        "platform": "sleeper",
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0, "te_reception_bonus": 0.5},
+        "roster": _SLEEPER_ROSTER_12,
     },
     "sleeper_superflex": {
         "platform": "sleeper",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -1.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 1.0,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
-        "roster": {
-            "teams": 12,
-            "rounds": 15,
-            "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 1,
-            "bench": 5, "dst": 1, "k": 0,
-        },
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0},
+        "roster": {**_SLEEPER_ROSTER_12, "superflex": 1, "bench": 5},
     },
+    "sleeper_superflex_tep": {
+        "platform": "sleeper",
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0, "te_reception_bonus": 0.5},
+        "roster": {**_SLEEPER_ROSTER_12, "superflex": 1, "bench": 5},
+    },
+    "sleeper_2qb": {
+        "platform": "sleeper",
+        "scoring": {**_SCORING_PPR, "interceptions": -1.0},
+        "roster": {**_SLEEPER_ROSTER_12, "qb": 2, "bench": 5},
+    },
+
+    # --- NFL.com ---
     "nfl_ppr": {
         "platform": "nfl",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -2.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 1.0,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -2.0,
-        },
+        "scoring": _SCORING_PPR,
         "roster": {
-            "teams": 10,
-            "rounds": 15,
+            "teams": 10, "rounds": 15,
             "qb": 1, "rb": 2, "wr": 2, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 6, "dst": 1, "k": 1,
+            "flex": 1, "superflex": 0, "bench": 6, "dst": 1, "k": 1,
         },
     },
+    "nfl_standard": {
+        "platform": "nfl",
+        "scoring": _SCORING_STANDARD,
+        "roster": {
+            "teams": 10, "rounds": 15,
+            "qb": 1, "rb": 2, "wr": 2, "te": 1,
+            "flex": 1, "superflex": 0, "bench": 6, "dst": 1, "k": 1,
+        },
+    },
+
+    # --- Underdog ---
     "underdog_bestball": {
         "platform": "underdog",
-        "scoring": {
-            "passing_yards": 0.04,
-            "passing_tds": 4.0,
-            "interceptions": -1.0,
-            "rushing_yards": 0.1,
-            "rushing_tds": 6.0,
-            "receptions": 0.5,
-            "receiving_yards": 0.1,
-            "receiving_tds": 6.0,
-            "fumbles_lost": -1.0,
-        },
+        "scoring": {**_SCORING_HALF_PPR, "interceptions": -1.0, "fumbles_lost": -1.0},
         "roster": {
-            "teams": 12,
-            "rounds": 18,
+            "teams": 12, "rounds": 18,
             "qb": 1, "rb": 2, "wr": 3, "te": 1,
-            "flex": 1, "superflex": 0,
-            "bench": 8, "dst": 0, "k": 0,
+            "flex": 1, "superflex": 0, "bench": 8, "dst": 0, "k": 0,
         },
     },
 }
@@ -344,20 +335,24 @@ def _deep_merge(base: dict, override: dict) -> None:
 
 def league_to_dict(config: EngineConfig) -> dict[str, Any]:
     """Serialize an EngineConfig to a JSON-friendly dict."""
+    scoring: dict[str, Any] = {
+        "passing_yards": config.scoring.passing_yards,
+        "passing_tds": config.scoring.passing_tds,
+        "interceptions": config.scoring.interceptions,
+        "rushing_yards": config.scoring.rushing_yards,
+        "rushing_tds": config.scoring.rushing_tds,
+        "receptions": config.scoring.receptions,
+        "receiving_yards": config.scoring.receiving_yards,
+        "receiving_tds": config.scoring.receiving_tds,
+        "fumbles_lost": config.scoring.fumbles_lost,
+    }
+    if config.scoring.te_reception_bonus != 0.0:
+        scoring["te_reception_bonus"] = config.scoring.te_reception_bonus
+
     return {
         "platform": config.platform,
         "season": config.current_season,
-        "scoring": {
-            "passing_yards": config.scoring.passing_yards,
-            "passing_tds": config.scoring.passing_tds,
-            "interceptions": config.scoring.interceptions,
-            "rushing_yards": config.scoring.rushing_yards,
-            "rushing_tds": config.scoring.rushing_tds,
-            "receptions": config.scoring.receptions,
-            "receiving_yards": config.scoring.receiving_yards,
-            "receiving_tds": config.scoring.receiving_tds,
-            "fumbles_lost": config.scoring.fumbles_lost,
-        },
+        "scoring": scoring,
         "roster": {
             "teams": config.roster.teams,
             "rounds": config.roster.rounds,
@@ -372,6 +367,21 @@ def league_to_dict(config: EngineConfig) -> dict[str, Any]:
             "k": config.roster.k,
         },
     }
+
+
+def describe_config(config: EngineConfig) -> str:
+    """One-line human-readable summary of a league config."""
+    parts = [
+        f"{config.roster.teams}-team",
+        config.scoring.format_tag,
+    ]
+    if config.roster.superflex:
+        parts.append("SF")
+    if config.roster.qb >= 2 and not config.roster.superflex:
+        parts.append("2QB")
+    if config.platform != "custom":
+        parts.append(f"({config.platform})")
+    return "  ".join(parts)
 
 
 def save_league_template(
