@@ -346,13 +346,17 @@ def multipliers(win_totals: str | None, output: str | None) -> None:
 @main.command()
 @click.option("--host", default="0.0.0.0", show_default=True,
               help="Bind address.")
-@click.option("--port", default=8000, show_default=True, type=int,
-              help="Port to listen on.")
+@click.option("--port", default=None, type=int,
+              help="Port to listen on (default: $PORT or 8000).")
 @click.option("--reload", "do_reload", is_flag=True, default=False,
               help="Enable auto-reload for development.")
-def serve(host: str, port: int, do_reload: bool) -> None:
+def serve(host: str, port: int | None, do_reload: bool) -> None:
     """Launch the FantasyQuant web draft room."""
+    import os
     import uvicorn
+
+    if port is None:
+        port = int(os.environ.get("PORT", "8000"))
 
     click.echo("Starting FantasyQuant web server...")
     click.echo(f"  http://{host}:{port}")

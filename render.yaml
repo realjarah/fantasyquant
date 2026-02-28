@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: fantasyquant
+    runtime: docker
+    plan: free
+    envVars:
+      - key: PORT
+        value: "10000"
