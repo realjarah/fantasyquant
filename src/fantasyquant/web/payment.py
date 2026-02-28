@@ -32,7 +32,7 @@ def create_checkout_session(session_id: str) -> str:
     In dev mode, returns a direct link to the draft room (no payment).
     """
     if _DEV_MODE:
-        return f"{FQ_BASE_URL}/draft/{session_id}"
+        return f"/draft/{session_id}"
 
     import stripe
     stripe.api_key = STRIPE_SECRET_KEY
