@@ -138,6 +138,14 @@ def build_projections(
         projections=final,
     )
 
+    # Deduplicate player_info so the UI shows each player once with their
+    # most recent team (the pivot creates multiple rows when a player
+    # changed teams across seasons).
+    player_info = player_info.drop_duplicates(subset="player_id", keep="last")
+    # Only keep players that survived the projection pipeline.
+    player_info = player_info[player_info["player_id"].isin(final.index)]
+    player_info = player_info.reset_index(drop=True)
+
     return ProjectionOutput(
         weekly_projections=final,
         player_info=player_info,

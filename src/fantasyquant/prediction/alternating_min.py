@@ -102,63 +102,63 @@ class AlternatingMinimization:
         n_teams = len(all_teams)
 
         # D_idx[i, j] = integer index of the defense player i faced in slot j.
+        opp_values = opponents.values
         D_idx = np.full((n_players, n_slots), -1, dtype=np.int32)
-        for i in range(n_players):
-            for j in range(n_slots):
-                opp = opponents.iat[i, j]
-                if pd.notna(opp) and opp in team_to_idx:
-                    D_idx[i, j] = team_to_idx[opp]
+        for team_name, idx in team_to_idx.items():
+            D_idx[opp_values == team_name] = idx
+
+        # Valid entries: mask True and opponent mapped.
+        valid = mask & (D_idx >= 0)
+        # Safe index array for w[...] lookups (replace -1 with 0 to avoid
+        # index errors; invalid entries are zeroed out via `valid`).
+        safe_idx = np.clip(D_idx, 0, n_teams - 1)
 
         # ----- Initialisation -----
-        u = np.ones(n_players, dtype=np.float64)
         w = np.ones(n_teams, dtype=np.float64)
 
         # Seed u with each player's mean observed points.
-        for i in range(n_players):
-            valid = mask[i]
-            if valid.any():
-                u[i] = A[i, valid].mean()
+        valid_counts = valid.sum(axis=1)
+        A_valid = np.where(valid, A, 0.0)
+        u = np.where(valid_counts > 0, A_valid.sum(axis=1) / valid_counts, 1.0)
 
         max_iter = self.config.alt_min_max_iterations
         tol = self.config.alt_min_convergence_tol
 
+        # Pre-flatten for Step B scatter operations.
+        d_flat = D_idx.ravel()
+        valid_flat = valid.ravel()
+        valid_indices = np.where(valid_flat)[0]
+        d_valid = d_flat[valid_indices]
+
         residual = np.inf
         for iteration in range(1, max_iter + 1):
             # --- Step A: fix w, solve for u ---
-            for i in range(n_players):
-                numer = 0.0
-                denom = 0.0
-                for j in range(n_slots):
-                    if not mask[i, j]:
-                        continue
-                    d = D_idx[i, j]
-                    wj = w[d] if d >= 0 else 1.0
-                    numer += A[i, j] * wj
-                    denom += wj * wj
-                u[i] = numer / denom if denom > 0 else 0.0
+            # W_mat[i,j] = w[D_idx[i,j]] for valid entries, 0 otherwise.
+            W_mat = np.where(valid, w[safe_idx], 0.0)
+            numer_u = (A * W_mat).sum(axis=1)
+            denom_u = (W_mat ** 2).sum(axis=1)
+            u = np.divide(numer_u, denom_u, where=denom_u > 0,
+                          out=np.zeros(n_players, dtype=np.float64))
 
             # --- Step B: fix u, solve for w ---
-            for d in range(n_teams):
-                numer = 0.0
-                denom = 0.0
-                locs = np.argwhere(D_idx == d)  # (row, col) pairs
-                for i, j in locs:
-                    if not mask[i, j]:
-                        continue
-                    numer += A[i, j] * u[i]
-                    denom += u[i] * u[i]
-                w[d] = numer / denom if denom > 0 else 1.0
+            # For each valid entry, look up the row's u value.
+            row_idx = valid_indices // n_slots
+            u_valid = u[row_idx]
+            a_valid = A.ravel()[valid_indices]
+            au_flat = a_valid * u_valid
+            uu_flat = u_valid ** 2
+
+            w_numer = np.zeros(n_teams, dtype=np.float64)
+            w_denom = np.zeros(n_teams, dtype=np.float64)
+            np.add.at(w_numer, d_valid, au_flat)
+            np.add.at(w_denom, d_valid, uu_flat)
+            w = np.divide(w_numer, w_denom, where=w_denom > 0,
+                          out=np.ones(n_teams, dtype=np.float64))
 
             # --- Convergence check ---
-            predicted = np.zeros_like(A)
-            for i in range(n_players):
-                for j in range(n_slots):
-                    if mask[i, j]:
-                        d = D_idx[i, j]
-                        wj = w[d] if d >= 0 else 1.0
-                        predicted[i, j] = u[i] * wj
-
-            new_residual = float(np.sqrt(np.sum((A[mask] - predicted[mask]) ** 2)))
+            W_check = np.where(valid, w[safe_idx], 0.0)
+            predicted = u[:, np.newaxis] * W_check
+            new_residual = float(np.sqrt(np.sum((A[valid] - predicted[valid]) ** 2)))
             if abs(residual - new_residual) < tol:
                 residual = new_residual
                 break
